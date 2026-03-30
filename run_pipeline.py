@@ -183,13 +183,14 @@ def main():
     # ── Step 1: 다운로드 ────────────────────────────────────────
     if not args.skip_download:
         print("\n[Step 1] NetSuite 파일 다운로드")
-        result = subprocess.run(
-            [sys.executable, "netsuite_harvester.py",
-             "--output-dir", args.data_dir],
-            capture_output=False
-        )
-        if result.returncode != 0:
-            print("❌ 다운로드 실패. --skip-download 로 기존 파일을 사용할 수 있습니다.")
+        try:
+            from netsuite_harvester import main as harvest_main
+            import sys as _sys
+            _sys.argv = ["netsuite_harvester.py", "--output-dir", args.data_dir]
+            harvest_main()
+        except Exception as e:
+            print(f"❌ 다운로드 실패: {e}")
+            print("--skip-download 옵션으로 기존 파일을 사용할 수 있습니다.")
             sys.exit(1)
     else:
         print("\n[Step 1] 다운로드 건너뜀 (기존 파일 사용)")
