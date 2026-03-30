@@ -2,7 +2,7 @@ name: IDIS Dashboard Update
 
 on:
   schedule:
-    - cron: '0 0,2,4,6,8 * * 1-5'
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,6 +16,14 @@ jobs:
         with:
           ref: main
 
+      - name: 현재 위치 및 파일 목록 확인
+        run: |
+          echo "현재 경로: $(pwd)"
+          echo "=== 전체 파일 목록 ==="
+          ls -la
+          echo "=== py 파일만 ==="
+          find . -name "*.py" | head -20
+
       - name: Python 설정
         uses: actions/setup-python@v5
         with:
@@ -26,9 +34,6 @@ jobs:
 
       - name: 폴더 생성
         run: mkdir -p output
-
-      - name: 파일 목록 확인
-        run: ls -la
 
       - name: 파이프라인 실행
         env:
@@ -43,8 +48,7 @@ jobs:
 
       - name: 결과 확인
         if: always()
-        run: |
-          echo "=== output 폴더 ===" && ls -la output/ || echo "없음"
+        run: ls -la output/ || echo "output 폴더 없음"
 
       - name: 아티팩트 저장
         uses: actions/upload-artifact@v4
