@@ -25,7 +25,7 @@ jobs:
         run: pip install requests pandas openpyxl lxml
 
       - name: 폴더 생성
-        run: mkdir -p output data
+        run: mkdir -p output
 
       - name: 파일 목록 확인
         run: ls -la
@@ -35,13 +35,16 @@ jobs:
           NS_EMAIL:     ${{ secrets.NS_EMAIL }}
           NS_PASSWORD:  ${{ secrets.NS_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python run_pipeline.py --skip-download --upload-github
+        run: |
+          python run_pipeline.py \
+            --skip-download \
+            --data-dir . \
+            --upload-github
 
       - name: 결과 확인
         if: always()
         run: |
           echo "=== output 폴더 ===" && ls -la output/ || echo "없음"
-          echo "=== data 폴더 ===" && ls -la data/ || echo "없음"
 
       - name: 아티팩트 저장
         uses: actions/upload-artifact@v4
