@@ -163,20 +163,26 @@ def get_rep_target(rep, month_num):
 # ════════════════════════════════════════════════════════════════
 def find_input_files(data_dir):
     files = {}
+    # 각 파일 유형별로 여러 패턴 시도 (언더스코어/공백/대시 모두 허용)
     patterns = {
-        "ytd":        "Sales_YTD_*.xls",
-        "booking":    "MTD_booking_*.xls",
-        "pf":         "Pending_Fulfillment_*.xls",
-        "activities": "Sales_Activities_*.xls",
-        "opps":       "Opps_and_Quotes_*.xlsx",
+        "ytd":        ["Sales_YTD*.xls",   "Sales YTD*.xls"],
+        "booking":    ["MTD_booking*.xls", "MTD booking*.xls", "MTD Booking*.xls"],
+        "pf":         ["Pending_Fulfillment*.xls", "Pending Fulfillment*.xls"],
+        "activities": ["Sales_Activities*.xls",    "Sales Activities*.xls"],
+        "opps":       ["Opps_and_Quotes*.xlsx",    "Opps and Quotes*.xlsx",
+                       "Opps_and_Quotes*.xls",     "Opps and Quotes*.xls"],
     }
-    for key, pat in patterns.items():
-        path = find_file(pat, data_dir)
-        if path:
-            print(f"  ✅ {key}: {os.path.basename(path)}")
-            files[key] = path
+    for key, pat_list in patterns.items():
+        found = None
+        for pat in pat_list:
+            found = find_file(pat, data_dir)
+            if found:
+                break
+        if found:
+            print(f"  ✅ {key}: {os.path.basename(found)}")
+            files[key] = found
         else:
-            print(f"  ❌ {key}: {pat} 파일 없음")
+            print(f"  ❌ {key}: 파일 없음 (시도한 패턴: {pat_list})")
     return files
 
 
