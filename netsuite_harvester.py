@@ -126,13 +126,15 @@ REPORTS = [
 #  브라우저 설정 — GitHub Actions 서버 전용
 # ════════════════════════════════════════════════════
 def make_driver(download_dir):
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
+
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
-    options.add_argument("--disable-setuid-sandbox")
     options.add_argument("--window-size=1920,1080")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -148,29 +150,13 @@ def make_driver(download_dir):
         "safebrowsing.disable_download_protection": True,
     })
 
-    # chromedriver-binary-auto 로 설치된 드라이버 사용
-    try:
-        import chromedriver_binary  # 드라이버 PATH 자동 등록
-    except ImportError:
-        pass  # 시스템 PATH에 있는 chromedriver 사용
-
-    from selenium.webdriver.chrome.service import Service as ChromeService
-    import shutil
-
-    # chromedriver 경로 찾기
-    driver_path = shutil.which("chromedriver")
-    if driver_path:
-        service = ChromeService(executable_path=driver_path)
-        driver = webdriver.Chrome(service=service, options=options)
-    else:
-        driver = webdriver.Chrome(options=options)
-
+    print("  ChromeDriver 준비 중...")
+    service = Service(ChromeDriverManager().install())
+    driver  = webdriver.Chrome(service=service, options=options)
+    print("  Chrome 실행 완료")
     return driver
 
 
-# ════════════════════════════════════════════════════
-#  로그인
-# ════════════════════════════════════════════════════
 def login(driver):
     if not EMAIL or not PASSWORD:
         raise RuntimeError(
