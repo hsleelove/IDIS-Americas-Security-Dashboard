@@ -42,10 +42,10 @@ OUTPUT_DIR  = "./output"
 JSON_NAME   = "dashboard_data.json"
 
 # GitHub Pages 업로드 설정 (선택)
-GITHUB_REPO       = "your-org/your-repo"       # 예: idis-americas/dashboard
+GITHUB_REPO       = os.environ.get("GITHUB_REPOSITORY", "hsleelove/IDIS-Americas-Security-Dashboard")
 GITHUB_BRANCH     = "gh-pages"
 GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_JSON_PATH  = "data/dashboard_data.json"  # 리포지토리 내 경로
+GITHUB_JSON_PATH  = "data/dashboard_data.json"
 
 # AWS S3 업로드 설정 (선택)
 S3_BUCKET         = os.environ.get("S3_BUCKET", "your-bucket-name")
