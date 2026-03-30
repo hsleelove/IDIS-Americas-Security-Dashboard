@@ -2,18 +2,8 @@ name: IDIS Dashboard Update
 
 on:
   schedule:
-    # 평일(월~금) 하루 5회 실행: 8시, 10시, 12시, 14시, 16시 (UTC 기준 = KST -9h)
-    # KST 9:00 = UTC 0:00 / KST 11:00 = UTC 2:00 / KST 13:00 = UTC 4:00
-    # KST 15:00 = UTC 6:00 / KST 17:00 = UTC 8:00
     - cron: '0 0,2,4,6,8 * * 1-5'
-
-  # 수동 실행 버튼 (GitHub Actions 탭에서 실행 가능)
   workflow_dispatch:
-    inputs:
-      skip_download:
-        description: '다운로드 건너뜀 (기존 파일 사용)'
-        type: boolean
-        default: false
 
 jobs:
   update-dashboard:
@@ -30,25 +20,33 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: 패키지 설치
         run: pip install requests pandas openpyxl lxml
+
+      - name: 폴더 생성
+        run: mkdir -p output data
+
+      - name: 파일 목록 확인
+        run: ls -la
 
       - name: 파이프라인 실행
         env:
           NS_EMAIL:     ${{ secrets.NS_EMAIL }}
           NS_PASSWORD:  ${{ secrets.NS_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python run_pipeline.py \
-            --upload-github \
-            ${{ github.event.inputs.skip_download == 'true' && '--skip-download' || '' }}
+        run: python run_pipeline.py --skip-download --upload-github
 
-      - name: 결과 아티팩트 저장
+      - name: 결과 확인
+        if: always()
+        run: |
+          echo "=== output 폴더 ===" && ls -la output/ || echo "없음"
+          echo "=== data 폴더 ===" && ls -la data/ || echo "없음"
+
+      - name: 아티팩트 저장
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: dashboard-data-${{ github.run_number }}
-          path: output/dashboard_data.json
+          path: output/
           retention-days: 7
