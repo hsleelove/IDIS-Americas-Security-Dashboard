@@ -127,32 +127,44 @@ REPORTS = [
 # ════════════════════════════════════════════════════
 def make_driver(download_dir):
     options = Options()
-    options.add_argument("--headless=new")          # 새 headless 모드
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-setuid-sandbox")
     options.add_argument("--window-size=1920,1080")
-    options.add_argument("--remote-debugging-port=9222")
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
     )
 
-    # 다운로드 폴더 설정
     dl_path = str(Path(download_dir).resolve())
     options.add_experimental_option("prefs", {
-        "download.default_directory":   dl_path,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade":   True,
-        "safebrowsing.enabled":         False,
+        "download.default_directory":               dl_path,
+        "download.prompt_for_download":             False,
+        "download.directory_upgrade":               True,
+        "safebrowsing.enabled":                     False,
         "safebrowsing.disable_download_protection": True,
     })
 
-    # GitHub Actions에 설치된 Chrome 직접 사용
-    # (webdriver-manager 없이)
-    driver = webdriver.Chrome(options=options)
+    # chromedriver-binary-auto 로 설치된 드라이버 사용
+    try:
+        import chromedriver_binary  # 드라이버 PATH 자동 등록
+    except ImportError:
+        pass  # 시스템 PATH에 있는 chromedriver 사용
+
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    import shutil
+
+    # chromedriver 경로 찾기
+    driver_path = shutil.which("chromedriver")
+    if driver_path:
+        service = ChromeService(executable_path=driver_path)
+        driver = webdriver.Chrome(service=service, options=options)
+    else:
+        driver = webdriver.Chrome(options=options)
+
     return driver
 
 
