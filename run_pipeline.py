@@ -189,7 +189,11 @@ def main():
             _sys.argv = ["netsuite_harvester.py", "--output-dir", args.data_dir]
             harvest_main()
         except Exception as e:
+            import traceback
             print(f"❌ 다운로드 실패: {e}")
+            print("--- 상세 오류 ---")
+            traceback.print_exc()
+            print("--- 오류 끝 ---")
             print("--skip-download 옵션으로 기존 파일을 사용할 수 있습니다.")
             sys.exit(1)
     else:
