@@ -22,10 +22,20 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install requests pandas openpyxl lxml selenium webdriver-manager
+        run: pip install requests pandas openpyxl lxml selenium
+
+      - name: Chrome 버전 확인
+        run: |
+          google-chrome --version || chromium-browser --version || chromium --version
+
+      - name: ChromeDriver 설치
+        run: |
+          CHROME_VER=$(google-chrome --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "120")
+          echo "Chrome 버전: $CHROME_VER"
+          pip install chromedriver-binary-auto
 
       - name: 폴더 생성
-        run: mkdir -p output
+        run: mkdir -p output data
 
       - name: 파이프라인 실행
         env:
@@ -36,7 +46,9 @@ jobs:
 
       - name: 결과 확인
         if: always()
-        run: ls -la output/ || echo "output 폴더 없음"
+        run: |
+          echo "=== output ===" && ls -la output/ || echo "없음"
+          echo "=== data ===" && ls -la data/ || echo "없음"
 
       - name: 아티팩트 저장
         uses: actions/upload-artifact@v4
