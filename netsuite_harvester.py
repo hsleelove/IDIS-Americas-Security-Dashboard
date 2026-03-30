@@ -1,18 +1,10 @@
 """
 netsuite_harvester.py
 =====================
-NetSuite 자동 로그인 → 리포트 XLS 다운로드
-
-사용법:
-  python netsuite_harvester.py
-  python netsuite_harvester.py --output-dir ./data
-
-환경변수:
-  NS_EMAIL    : NetSuite 로그인 이메일
-  NS_PASSWORD : NetSuite 비밀번호
+Selenium으로 NetSuite 브라우저 자동조작 → Excel 다운로드
 
 필요 패키지:
-  pip install requests
+  pip install selenium webdriver-manager
 """
 
 import os
@@ -20,129 +12,144 @@ import time
 import argparse
 from datetime import date
 from pathlib import Path
-from urllib.parse import urlencode
 
 try:
-    import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
 except ImportError:
-    print("pip install requests")
+    print("pip install selenium webdriver-manager")
     raise
 
 # ════════════════════════════════════════════════════
-#  계정 설정
+#  설정
 # ════════════════════════════════════════════════════
 ACCOUNT_ID = "4631664"
 BASE_URL   = f"https://{ACCOUNT_ID}.app.netsuite.com"
 EMAIL      = os.environ.get("NS_EMAIL",    "")
 PASSWORD   = os.environ.get("NS_PASSWORD", "")
 
-DELAY_BETWEEN = 6   # 리포트 사이 대기 시간(초)
+DELAY_BETWEEN  = 8    # 리포트 사이 대기 (초)
+PAGE_LOAD_WAIT = 25   # 페이지 로딩 대기 (초)
+
+# Excel Export 버튼 XPath (모든 리포트 동일)
+EXCEL_BTN_XPATH = "/html/body/div[1]/div[4]/form[1]/div[2]/table[2]/tbody/tr/td[1]/table/tbody/tr/td[2]/div"
 
 # ════════════════════════════════════════════════════
 #  리포트 목록
 # ════════════════════════════════════════════════════
 REPORTS = [
     {
-        "key":      "opps",
-        "name":     "Opps & Quotation",
-        "searchid": "3408",
-        "searchtype": "Transaction",
-        "extra_params": {
-            "Transaction_DATECREATEDrange": "CUSTOM",
-            "Transaction_DATECREATEDfrom":  "1/1/2024",
-            "Transaction_DATECREATEDmodi":  "WITHIN",
-            "Transaction_DATECREATED":      "CUSTOM",
-            "Transaction_STATUS":           "@ALL@",
-            "Transaction_FORECASTTYPE":     "@ALL@",
-            "detail":     "IT_CUSTITEMCUSTITEM_CVS_PRODUCT_FAMILY",
-            "detailname": "Total",
-        },
+        "key":  "opps",
+        "name": "Opps & Quotation",
+        "url":  (
+            "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
+            "?searchid=3408"
+            "&Transaction_DATECREATEDmodi=WITHIN"
+            "&Transaction_DATECREATED=CUSTOM"
+            "&Transaction_DATECREATEDrange=CUSTOM"
+            "&Transaction_DATECREATEDfrom=1%2F1%2F2024"
+            "&Transaction_STATUS=%40ALL%40"
+            "&Transaction_FORECASTTYPE=%40ALL%40"
+            "&detail=IT_CUSTITEMCUSTITEM_CVS_PRODUCT_FAMILY"
+            "&detailname=Total"
+        ),
         "filename": "Opps_and_Quotes_{date}_W{week}.xlsx",
-        "format":   "xlsx",
     },
     {
-        "key":      "booking",
-        "name":     "MTD Booking",
-        "searchid": "7165",
-        "searchtype": "Transaction",
-        "extra_params": {
-            "Transaction_DATECREATEDmodi": "WITHIN",
-            "Transaction_DATECREATED":     "TY",
-            "Transaction_CLASStype":       "ANYOF",
-            "Transaction_CLASS":           "@ALL@",
-            "detail":     "CUSTBODY_SALESTEAM_ORDER",
-            "detailname": "Total",
-        },
+        "key":  "booking",
+        "name": "MTD Booking",
+        "url":  (
+            "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
+            "?searchid=7165"
+            "&Transaction_DATECREATEDmodi=WITHIN"
+            "&Transaction_DATECREATED=TY"
+            "&Transaction_CLASStype=ANYOF"
+            "&Transaction_CLASS=%40ALL%40"
+            "&detail=CUSTBODY_SALESTEAM_ORDER"
+            "&detailname=Total"
+        ),
         "filename": "MTD_booking_{date}_W{week}.xls",
-        "format":   "xls",
     },
     {
-        "key":      "ytd",
-        "name":     "Sales YTD",
-        "searchid": "7255",
-        "searchtype": "Transaction",
-        "extra_params": {
-            "Transaction_TRANDATEmodi": "WITHIN",
-            "Transaction_TRANDATE":     "TY",
-            "Transaction_CLASStype":    "ANYOF",
-            "Transaction_CLASS":        "@ALL@",
-            "detail":     "AL_CUSTBODY_SALESTEAM_ORDER",
-            "detailname": "Total",
-        },
+        "key":  "ytd",
+        "name": "Sales YTD",
+        "url":  (
+            "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
+            "?searchid=7255"
+            "&Transaction_TRANDATEmodi=WITHIN"
+            "&Transaction_TRANDATE=TY"
+            "&Transaction_CLASStype=ANYOF"
+            "&Transaction_CLASS=%40ALL%40"
+            "&detail=AL_CUSTBODY_SALESTEAM_ORDER"
+            "&detailname=Total"
+        ),
         "filename": "Sales_YTD_{date}.xls",
-        "format":   "xls",
     },
     {
-        "key":      "pf",
-        "name":     "Pending Fulfillment",
-        "searchid": "7227",
-        "searchtype": "Transaction",
-        "extra_params": {
-            "Transaction_SHIPDATEmodi": "WITHIN",
-            "Transaction_SHIPDATE":     "TY",
-            "detail":     "CUSTBODY_SALESTEAM_ORDER",
-            "detailname": "Total",
-        },
+        "key":  "pf",
+        "name": "Pending Fulfillment",
+        "url":  (
+            "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
+            "?searchid=7227"
+            "&Transaction_SHIPDATEmodi=WITHIN"
+            "&Transaction_SHIPDATE=TY"
+            "&detail=CUSTBODY_SALESTEAM_ORDER"
+            "&detailname=Total"
+        ),
         "filename": "Pending_Fulfillment_{date}_W{week}.xls",
-        "format":   "xls",
     },
     {
-        "key":      "activities",
-        "name":     "Sales Activities",
-        "searchid": "7349",
-        "searchtype": "Calendar",
-        "extra_params": {
-            "Calendar_DATErange": "CUSTOM",
-            "Calendar_DATEfrom":  "1/1/2024",
-            "Calendar_DATEmodi":  "WITHIN",
-            "Calendar_DATE":      "CUSTOM",
-            "detail":     "Calendar_ATTENDEE",
-            "detailname": "Total",
-        },
+        "key":  "activities",
+        "name": "Sales Activities",
+        "url":  (
+            "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
+            "?searchid=7349"
+            "&Calendar_DATEmodi=WITHIN"
+            "&Calendar_DATE=CUSTOM"
+            "&Calendar_DATErange=CUSTOM"
+            "&Calendar_DATEfrom=1%2F1%2F2024"
+            "&detail=Calendar_ATTENDEE"
+            "&detailname=Total"
+        ),
         "filename": "Sales_Activities_{date}_W{week}.xls",
-        "format":   "xls",
     },
 ]
 
 
 # ════════════════════════════════════════════════════
+#  브라우저 설정
+# ════════════════════════════════════════════════════
+def make_driver(download_dir):
+    options = Options()
+    options.add_argument("--headless")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    )
+    prefs = {
+        "download.default_directory":   str(Path(download_dir).resolve()),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade":   True,
+        "safebrowsing.enabled":         False,
+    }
+    options.add_experimental_option("prefs", prefs)
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
+
+
+# ════════════════════════════════════════════════════
 #  로그인
 # ════════════════════════════════════════════════════
-def make_session():
-    s = requests.Session()
-    retry = Retry(total=3, backoff_factor=2,
-                  status_forcelist=[429, 500, 502, 503, 504])
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-    })
-    return s
-
-
-def login(session):
+def login(driver):
     if not EMAIL or not PASSWORD:
         raise RuntimeError(
             "환경변수를 설정하세요:\n"
@@ -151,83 +158,85 @@ def login(session):
         )
 
     print(f"  로그인 중... ({EMAIL})")
+    driver.get(f"{BASE_URL}/pages/loginform.jsp")
 
-    # 로그인 페이지 먼저 열기 (쿠키 초기화)
-    session.get(f"{BASE_URL}/pages/loginform.jsp", timeout=30)
+    wait = WebDriverWait(driver, PAGE_LOAD_WAIT)
 
-    # 로그인 form 제출
-    resp = session.post(
-        f"{BASE_URL}/pages/loginform.jsp",
-        data={
-            "username":  EMAIL,
-            "password":  PASSWORD,
-            "account":   ACCOUNT_ID,
-            "role":      "3",
-            "redirect2": "/app/center/card.nl",
-        },
-        timeout=30,
-        allow_redirects=True,
-    )
+    # 이메일 입력
+    wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
 
-    if "loginForm" in resp.url or "Invalid login" in resp.text:
+    # 비밀번호 입력
+    driver.find_element(By.ID, "password").send_keys(PASSWORD)
+
+    # 로그인 버튼
+    driver.find_element(By.ID, "submitButton").click()
+
+    # 로그인 완료 대기
+    time.sleep(6)
+
+    if "loginForm" in driver.current_url or "login" in driver.current_url.lower():
         raise RuntimeError("로그인 실패 — 이메일/비밀번호 확인하세요")
 
     print("  ✅ 로그인 성공")
 
 
 # ════════════════════════════════════════════════════
-#  다운로드
+#  Excel 버튼 클릭 & 다운로드 대기
 # ════════════════════════════════════════════════════
-def download_report(session, report, output_dir, date_str, week_str):
-    today = date.today()
-
-    # 오늘 날짜 (NetSuite 형식: M/D/YYYY)
-    today_ns = f"{today.month}/{today.day}/{today.year}"
-
-    # 파라미터 조립
-    params = {
-        "searchtype": report["searchtype"],
-        "searchid":   report["searchid"],
-        "style":      "NORMAL",
-        "dle":        "F",
-    }
-    params.update(report["extra_params"])
-
-    # 날짜 끝 값 오늘로 설정
-    for k in ["Transaction_DATECREATEDto", "Calendar_DATEto"]:
-        if k in params and not params[k]:
-            params[k] = today_ns
-
-    # XLS / XLSX 다운로드 파라미터
-    if report["format"] == "xlsx":
-        params.update({"csv": "T", "OfficeXML": "T"})
-    else:
-        params.update({"csv": "T", "OfficeXML": "F", "xls": "T"})
-
-    url = f"{BASE_URL}/app/common/search/searchresults.nl?" + urlencode(params)
-
+def download_excel(driver, report, output_dir, date_str, week_str):
+    name     = report["name"]
     filename = report["filename"].format(date=date_str, week=week_str)
     out_path = Path(output_dir) / filename
 
-    print(f"  [{report['name']}] 다운로드 중...", end="", flush=True)
+    print(f"  [{name}] 페이지 로딩...", end="", flush=True)
 
-    resp = session.get(url, timeout=120, stream=True)
+    # 페이지 열기
+    driver.get(report["url"])
 
-    if resp.status_code != 200:
-        print(f" ❌ HTTP {resp.status_code}")
+    # 페이지 완전 로딩 대기
+    wait = WebDriverWait(driver, PAGE_LOAD_WAIT)
+    try:
+        wait.until(EC.presence_of_element_located((By.XPATH, EXCEL_BTN_XPATH)))
+    except:
+        print(f" ❌ 페이지 로딩 실패 또는 버튼 없음")
+        print(f"     현재 URL: {driver.current_url}")
         return None
 
-    with open(out_path, "wb") as f:
-        for chunk in resp.iter_content(8192):
-            f.write(chunk)
+    print(f" Excel 클릭...", end="", flush=True)
 
-    size_kb = out_path.stat().st_size // 1024
-    if size_kb < 1:
-        print(f" ⚠️  파일 너무 작음 ({size_kb}KB)")
+    # 다운로드 전 파일 목록 스냅샷
+    before = set(Path(output_dir).glob("*"))
+
+    # Excel 버튼 클릭
+    try:
+        btn = driver.find_element(By.XPATH, EXCEL_BTN_XPATH)
+        driver.execute_script("arguments[0].click();", btn)
+    except Exception as e:
+        print(f" ❌ 클릭 실패: {e}")
         return None
 
-    print(f" ✅ {filename} ({size_kb}KB)")
-    return str(out_path)
+    # 다운로드 완료 대기 (최대 60초)
+    for _ in range(60):
+        time.sleep(1)
+        after   = set(Path(output_dir).glob("*"))
+        new_files = [
+            f for f in (after - before)
+            if not str(f).endswith(".crdownload")
+            and not str(f).endswith(".tmp")
+        ]
+        if new_files:
+            downloaded = new_files[0]
+            # 파일명 지정된 이름으로 변경
+            downloaded.rename(out_path)
+            size_kb = out_path.stat().st_size // 1024
+            if size_kb < 2:
+                print(f" ⚠️  {filename} ({size_kb}KB) — 너무 작음, 내용 확인 필요")
+            else:
+                print(f" ✅ {filename} ({size_kb}KB)")
+            return str(out_path)
+
+    print(f" ❌ 다운로드 타임아웃 (60초)")
+    return None
 
 
 # ════════════════════════════════════════════════════
@@ -246,30 +255,39 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 50)
-    print(f"  NetSuite Harvester  {today}  {week_str}")
+    print(f"  NetSuite Harvester (Selenium)  {today}  {week_str}")
     print(f"  출력: {output_dir.resolve()}")
     print("=" * 50)
 
-    session = make_session()
+    driver = make_driver(output_dir)
 
     try:
-        login(session)
-    except RuntimeError as e:
-        print(f"\n❌ {e}")
-        return {}
+        login(driver)
 
-    print(f"\n📥 {len(REPORTS)}개 리포트 (각 {DELAY_BETWEEN}초 간격):\n")
+        print(f"\n📥 {len(REPORTS)}개 리포트 (각 {DELAY_BETWEEN}초 간격):\n")
 
-    downloaded = {}
-    for i, report in enumerate(REPORTS):
-        path = download_report(session, report, output_dir, date_str, week_str)
-        if path:
-            downloaded[report["key"]] = path
-        if i < len(REPORTS) - 1:
-            time.sleep(DELAY_BETWEEN)
+        downloaded = {}
+        for i, report in enumerate(REPORTS):
+            path = download_excel(driver, report, output_dir, date_str, week_str)
+            if path:
+                downloaded[report["key"]] = path
 
-    print(f"\n완료: {len(downloaded)}/{len(REPORTS)}")
-    return downloaded
+            if i < len(REPORTS) - 1:
+                print(f"     {DELAY_BETWEEN}초 대기 중...")
+                time.sleep(DELAY_BETWEEN)
+
+        print(f"\n{'='*50}")
+        print(f"  완료: {len(downloaded)}/{len(REPORTS)}")
+        for key, path in downloaded.items():
+            print(f"  ✅ {key}: {Path(path).name}")
+        for r in REPORTS:
+            if r["key"] not in downloaded:
+                print(f"  ❌ {r['key']}: 실패")
+
+        return downloaded
+
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
