@@ -52,12 +52,3 @@ jobs:
           name: dashboard-data-${{ github.run_number }}
           path: output/dashboard_data.json
           retention-days: 7
-
-      - name: 슬랙 알림 (선택 — SLACK_WEBHOOK 시크릿 설정 시 활성화)
-        if: success() && secrets.SLACK_WEBHOOK != ''
-        env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        run: |
-          curl -X POST "$SLACK_WEBHOOK" \
-            -H 'Content-type: application/json' \
-            -d '{"text":"✅ IDIS Dashboard 업데이트 완료 — ${{ github.run_number }}"}'
