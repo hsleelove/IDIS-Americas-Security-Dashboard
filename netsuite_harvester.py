@@ -1,10 +1,10 @@
 """
 netsuite_harvester.py
 =====================
-Selenium으로 NetSuite 브라우저 자동조작 → Excel 다운로드
+Selenium으로 NetSuite 자동 로그인 → Excel 다운로드
 
 필요 패키지:
-  pip install selenium
+  pip install selenium webdriver-manager
 """
 
 import os
@@ -17,22 +17,24 @@ try:
     from selenium import webdriver
     from selenium.webdriver.common.by import By
     from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
 except ImportError:
-    print("pip install selenium")
+    print("pip install selenium webdriver-manager")
     raise
 
 # ════════════════════════════════════════════════════
-#  설정
+#  계정 설정
 # ════════════════════════════════════════════════════
 ACCOUNT_ID = "4631664"
-BASE_URL   = f"https://{ACCOUNT_ID}.app.netsuite.com"
+LOGIN_URL  = "https://system.netsuite.com/pages/customerlogin.jsp?country=US"
 EMAIL      = os.environ.get("NS_EMAIL",    "")
 PASSWORD   = os.environ.get("NS_PASSWORD", "")
 
-DELAY_BETWEEN  = 8
-PAGE_LOAD_WAIT = 25
+DELAY_BETWEEN  = 8    # 리포트 사이 대기 (초)
+PAGE_LOAD_WAIT = 25   # 페이지 로딩 대기 (초)
 
 # Excel Export 버튼 XPath (모든 리포트 동일)
 EXCEL_BTN_XPATH = (
@@ -49,15 +51,32 @@ REPORTS = [
         "name": "Opps & Quotation",
         "url":  (
             "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
-            "?searchid=3408"
-            "&Transaction_DATECREATEDmodi=WITHIN"
-            "&Transaction_DATECREATED=CUSTOM"
+            "?searchtype=Transaction"
             "&Transaction_DATECREATEDrange=CUSTOM"
             "&Transaction_DATECREATEDfrom=1%2F1%2F2024"
+            "&Transaction_DATECREATEDfromrel_formattedValue="
+            "&Transaction_DATECREATEDfromrel="
+            "&Transaction_DATECREATEDfromreltype=DAGO"
+            "&Transaction_DATECREATEDto=12%2F31%2F2026"
+            "&Transaction_DATECREATEDtorel_formattedValue="
+            "&Transaction_DATECREATEDtorel="
+            "&Transaction_DATECREATEDtoreltype=DAGO"
             "&Transaction_STATUS=%40ALL%40"
             "&Transaction_FORECASTTYPE=%40ALL%40"
+            "&IT_CUSTITEM_BRAND=%40ALL%40"
+            "&IT_CUSTITEM_PRODUCT_SERIES=%40ALL%40"
+            "&style=NORMAL"
+            "&Transaction_DATECREATEDmodi=WITHIN"
+            "&Transaction_DATECREATED=CUSTOM"
+            "&searchid=3408"
+            "&dle=F"
+            "&sortcol=Transaction_NAME_raw"
+            "&sortdir=ASC"
             "&detail=IT_CUSTITEMCUSTITEM_CVS_PRODUCT_FAMILY"
             "&detailname=Total"
+            "&IT_CUSTITEMCUSTITEM_CVS_PRODUCT_FAMILY=%40PRESERVE%40"
+            "&IT_CUSTITEMCUSTITEM_CVS_PRODUCT_FAMILYtype=ANYOF"
+            "&twbx=F"
         ),
         "filename": "Opps_and_Quotes_{date}_W{week}.xlsx",
     },
@@ -66,13 +85,16 @@ REPORTS = [
         "name": "MTD Booking",
         "url":  (
             "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
-            "?searchid=7165"
+            "?searchtype=Transaction"
+            "&CUSTBODY_SALESTEAM_ORDERtype=ANYOF"
+            "&CUSTBODY_SALESTEAM_ORDER=%40PRESERVE%40"
+            "&detail=CUSTBODY_SALESTEAM_ORDER"
+            "&detailname=Total"
+            "&searchid=7165"
             "&Transaction_DATECREATEDmodi=WITHIN"
             "&Transaction_DATECREATED=TY"
             "&Transaction_CLASStype=ANYOF"
             "&Transaction_CLASS=%40ALL%40"
-            "&detail=CUSTBODY_SALESTEAM_ORDER"
-            "&detailname=Total"
         ),
         "filename": "MTD_booking_{date}_W{week}.xls",
     },
@@ -81,13 +103,18 @@ REPORTS = [
         "name": "Sales YTD",
         "url":  (
             "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
-            "?searchid=7255"
+            "?searchtype=Transaction"
+            "&AL_CUSTBODY_SALESTEAM_ORDERtype=ANYOF"
+            "&AL_CUSTBODY_SALESTEAM_ORDER=%40PRESERVE%40"
+            "&detail=AL_CUSTBODY_SALESTEAM_ORDER"
+            "&detailname=Total"
+            "&searchid=7255"
             "&Transaction_TRANDATEmodi=WITHIN"
             "&Transaction_TRANDATE=TY"
             "&Transaction_CLASStype=ANYOF"
             "&Transaction_CLASS=%40ALL%40"
-            "&detail=AL_CUSTBODY_SALESTEAM_ORDER"
-            "&detailname=Total"
+            "&AL_Transaction_SALESREPtype=ANYOF"
+            "&AL_Transaction_SALESREP=%40ALL%40"
         ),
         "filename": "Sales_YTD_{date}.xls",
     },
@@ -96,11 +123,14 @@ REPORTS = [
         "name": "Pending Fulfillment",
         "url":  (
             "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
-            "?searchid=7227"
-            "&Transaction_SHIPDATEmodi=WITHIN"
-            "&Transaction_SHIPDATE=TY"
+            "?searchtype=Transaction"
+            "&CUSTBODY_SALESTEAM_ORDERtype=ANYOF"
+            "&CUSTBODY_SALESTEAM_ORDER=%40PRESERVE%40"
             "&detail=CUSTBODY_SALESTEAM_ORDER"
             "&detailname=Total"
+            "&searchid=7227"
+            "&Transaction_SHIPDATEmodi=WITHIN"
+            "&Transaction_SHIPDATE=TY"
         ),
         "filename": "Pending_Fulfillment_{date}_W{week}.xls",
     },
@@ -109,13 +139,29 @@ REPORTS = [
         "name": "Sales Activities",
         "url":  (
             "https://4631664.app.netsuite.com/app/common/search/searchresults.nl"
-            "?searchid=7349"
-            "&Calendar_DATEmodi=WITHIN"
-            "&Calendar_DATE=CUSTOM"
+            "?searchtype=Calendar"
             "&Calendar_DATErange=CUSTOM"
             "&Calendar_DATEfrom=1%2F1%2F2024"
+            "&Calendar_DATEfromrel_formattedValue="
+            "&Calendar_DATEfromrel="
+            "&Calendar_DATEfromreltype=DAGO"
+            "&Calendar_DATEto=12%2F31%2F2026"
+            "&Calendar_DATEtorel_formattedValue="
+            "&Calendar_DATEtorel="
+            "&Calendar_DATEtoreltype=DAGO"
+            "&EN_CUSTENTITY_SALESTEAM_REP=%40ALL%40"
+            "&style=NORMAL"
+            "&Calendar_DATEmodi=WITHIN"
+            "&Calendar_DATE=CUSTOM"
+            "&searchid=7349"
+            "&dle=F"
+            "&sortcol=Calendar_INTERNALID_raw"
+            "&sortdir=DESC"
             "&detail=Calendar_ATTENDEE"
             "&detailname=Total"
+            "&Calendar_ATTENDEE=%40PRESERVE%40"
+            "&Calendar_ATTENDEEtype=ANYOF"
+            "&twbx=F"
         ),
         "filename": "Sales_Activities_{date}_W{week}.xls",
     },
@@ -123,12 +169,9 @@ REPORTS = [
 
 
 # ════════════════════════════════════════════════════
-#  브라우저 설정 — GitHub Actions 서버 전용
+#  브라우저 설정
 # ════════════════════════════════════════════════════
 def make_driver(download_dir):
-    from selenium.webdriver.chrome.service import Service
-    from webdriver_manager.chrome import ChromeDriverManager
-
     options = Options()
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
@@ -140,7 +183,6 @@ def make_driver(download_dir):
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
     )
-
     dl_path = str(Path(download_dir).resolve())
     options.add_experimental_option("prefs", {
         "download.default_directory":               dl_path,
@@ -149,7 +191,6 @@ def make_driver(download_dir):
         "safebrowsing.enabled":                     False,
         "safebrowsing.disable_download_protection": True,
     })
-
     print("  ChromeDriver 준비 중...")
     service = Service(ChromeDriverManager().install())
     driver  = webdriver.Chrome(service=service, options=options)
@@ -157,6 +198,9 @@ def make_driver(download_dir):
     return driver
 
 
+# ════════════════════════════════════════════════════
+#  로그인
+# ════════════════════════════════════════════════════
 def login(driver):
     if not EMAIL or not PASSWORD:
         raise RuntimeError(
@@ -165,51 +209,75 @@ def login(driver):
         )
 
     print(f"  로그인 중... ({EMAIL})")
-
-    try:
-        driver.get(f"{BASE_URL}/pages/loginform.jsp")
-        print(f"  페이지 로드 완료: {driver.current_url}")
-    except Exception as e:
-        raise RuntimeError(f"로그인 페이지 열기 실패: {e}")
+    driver.get(LOGIN_URL)
+    time.sleep(3)
+    print(f"  로그인 페이지: {driver.current_url}")
 
     wait = WebDriverWait(driver, PAGE_LOAD_WAIT)
 
-    try:
-        email_el = wait.until(EC.presence_of_element_located((By.ID, "email")))
-        print("  email 필드 찾음")
-        email_el.send_keys(EMAIL)
-    except Exception as e:
-        # ID가 다를 수 있음 — 페이지 소스 일부 출력
-        src = driver.page_source[:500]
-        raise RuntimeError(f"email 필드 못 찾음: {e}\n페이지 소스: {src}")
-
-    try:
-        driver.find_element(By.ID, "password").send_keys(PASSWORD)
-        print("  password 필드 입력 완료")
-    except Exception as e:
-        raise RuntimeError(f"password 필드 못 찾음: {e}")
-
-    try:
-        driver.find_element(By.ID, "submitButton").click()
-        print("  로그인 버튼 클릭 완료")
-    except Exception as e:
-        # submitButton ID가 다를 수 있음
+    # 이메일 입력 — 여러 ID 후보 시도
+    email_el = None
+    for eid in ["email", "Email", "userName", "username"]:
         try:
-            driver.find_element(By.XPATH, "//input[@type='submit']").click()
-            print("  로그인 버튼(submit) 클릭 완료")
+            email_el = driver.find_element(By.ID, eid)
+            print(f"  email 필드 찾음 (ID: {eid})")
+            break
+        except: pass
+    if not email_el:
+        try:
+            email_el = driver.find_element(By.XPATH, "//input[@type='email' or @name='email' or @name='userName']")
         except:
-            raise RuntimeError(f"로그인 버튼 못 찾음: {e}")
+            src = driver.page_source[:600]
+            raise RuntimeError(f"email 필드 못 찾음\n페이지 소스:\n{src}")
+
+    email_el.clear()
+    email_el.send_keys(EMAIL)
+
+    # 비밀번호 입력
+    pw_el = None
+    for pid in ["password", "Password", "pass"]:
+        try:
+            pw_el = driver.find_element(By.ID, pid)
+            break
+        except: pass
+    if not pw_el:
+        try:
+            pw_el = driver.find_element(By.XPATH, "//input[@type='password']")
+        except:
+            raise RuntimeError("password 필드 못 찾음")
+    pw_el.clear()
+    pw_el.send_keys(PASSWORD)
+    print("  비밀번호 입력 완료")
+
+    # 로그인 버튼 클릭
+    submit_el = None
+    for sid in ["submitButton", "submit", "loginButton", "Login"]:
+        try:
+            submit_el = driver.find_element(By.ID, sid)
+            break
+        except: pass
+    if not submit_el:
+        try:
+            submit_el = driver.find_element(By.XPATH, "//input[@type='submit']")
+        except:
+            try:
+                submit_el = driver.find_element(By.XPATH, "//button[@type='submit']")
+            except:
+                raise RuntimeError("로그인 버튼 못 찾음")
+    submit_el.click()
+    print("  로그인 버튼 클릭")
 
     time.sleep(6)
     print(f"  로그인 후 URL: {driver.current_url}")
 
-    if "loginForm" in driver.current_url or "/pages/login" in driver.current_url:
-        # 오류 메시지 찾기
+    if "loginform" in driver.current_url or "customerlogin" in driver.current_url:
         try:
             err = driver.find_element(By.CLASS_NAME, "errMsg").text
             raise RuntimeError(f"로그인 실패: {err}")
+        except RuntimeError:
+            raise
         except:
-            raise RuntimeError(f"로그인 실패 — 현재 URL: {driver.current_url}")
+            raise RuntimeError(f"로그인 실패 — URL: {driver.current_url}")
 
     print("  ✅ 로그인 성공")
 
@@ -225,8 +293,8 @@ def download_excel(driver, report, output_dir, date_str, week_str):
     print(f"  [{name}] 로딩...", end="", flush=True)
 
     driver.get(report["url"])
-
     wait = WebDriverWait(driver, PAGE_LOAD_WAIT)
+
     try:
         wait.until(EC.presence_of_element_located((By.XPATH, EXCEL_BTN_XPATH)))
     except Exception as e:
@@ -236,7 +304,6 @@ def download_excel(driver, report, output_dir, date_str, week_str):
     # 다운로드 전 스냅샷
     before = set(Path(output_dir).glob("*"))
 
-    # 버튼 클릭
     try:
         btn = driver.find_element(By.XPATH, EXCEL_BTN_XPATH)
         driver.execute_script("arguments[0].click();", btn)
