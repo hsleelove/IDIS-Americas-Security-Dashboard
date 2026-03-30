@@ -24,20 +24,42 @@ jobs:
       - name: 패키지 설치
         run: pip install requests pandas openpyxl lxml selenium webdriver-manager
 
-      - name: Chrome & ChromeDriver 설치
+      - name: Chrome 환경 진단
         run: |
-          # Chrome 설치
-          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update -q
-          sudo apt-get install -y google-chrome-stable
-          
-          # 버전 확인
-          CHROME_VER=$(google-chrome --version | grep -oP '[\d.]+' | head -1)
-          echo "설치된 Chrome: $CHROME_VER"
-          
-          # ChromeDriver 설치 (버전 맞춤)
-          pip install chromedriver-binary-auto
+          echo "=== Chrome 위치 ==="
+          which google-chrome || which chromium-browser || which chromium || echo "Chrome 없음"
+          echo "=== Chrome 버전 ==="
+          google-chrome --version 2>/dev/null || chromium-browser --version 2>/dev/null || chromium --version 2>/dev/null || echo "버전 확인 불가"
+          echo "=== ChromeDriver 위치 ==="
+          which chromedriver || echo "chromedriver 없음"
+          echo "=== ChromeDriver 버전 ==="
+          chromedriver --version 2>/dev/null || echo "버전 확인 불가"
+
+      - name: Selenium 연결 테스트
+        run: |
+          python3 -c "
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.chrome.service import Service
+          from webdriver_manager.chrome import ChromeDriverManager
+          import os
+
+          options = Options()
+          options.add_argument('--headless=new')
+          options.add_argument('--no-sandbox')
+          options.add_argument('--disable-dev-shm-usage')
+          options.add_argument('--disable-gpu')
+
+          print('ChromeDriver 설치 중...')
+          service = Service(ChromeDriverManager().install())
+          print('Chrome 실행 중...')
+          driver = webdriver.Chrome(service=service, options=options)
+          print('Chrome 실행 성공!')
+          driver.get('https://www.google.com')
+          print('페이지 열기 성공:', driver.title)
+          driver.quit()
+          print('테스트 완료!')
+          "
 
       - name: 폴더 생성
         run: mkdir -p output data
