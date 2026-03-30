@@ -16,14 +16,6 @@ jobs:
         with:
           ref: main
 
-      - name: 현재 위치 및 파일 목록 확인
-        run: |
-          echo "현재 경로: $(pwd)"
-          echo "=== 전체 파일 목록 ==="
-          ls -la
-          echo "=== py 파일만 ==="
-          find . -name "*.py" | head -20
-
       - name: Python 설정
         uses: actions/setup-python@v5
         with:
@@ -40,11 +32,7 @@ jobs:
           NS_EMAIL:     ${{ secrets.NS_EMAIL }}
           NS_PASSWORD:  ${{ secrets.NS_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python run_pipeline.py \
-            --skip-download \
-            --data-dir . \
-            --upload-github
+        run: python run_pipeline.py --upload-github
 
       - name: 결과 확인
         if: always()
