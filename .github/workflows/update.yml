@@ -22,16 +22,21 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install requests pandas openpyxl lxml selenium
+        run: pip install requests pandas openpyxl lxml selenium webdriver-manager
 
-      - name: Chrome 버전 확인
+      - name: Chrome & ChromeDriver 설치
         run: |
-          google-chrome --version || chromium-browser --version || chromium --version
-
-      - name: ChromeDriver 설치
-        run: |
-          CHROME_VER=$(google-chrome --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "120")
-          echo "Chrome 버전: $CHROME_VER"
+          # Chrome 설치
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -q
+          sudo apt-get install -y google-chrome-stable
+          
+          # 버전 확인
+          CHROME_VER=$(google-chrome --version | grep -oP '[\d.]+' | head -1)
+          echo "설치된 Chrome: $CHROME_VER"
+          
+          # ChromeDriver 설치 (버전 맞춤)
           pip install chromedriver-binary-auto
 
       - name: 폴더 생성
