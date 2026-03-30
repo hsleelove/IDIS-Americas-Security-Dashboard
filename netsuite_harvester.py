@@ -165,17 +165,51 @@ def login(driver):
         )
 
     print(f"  로그인 중... ({EMAIL})")
-    driver.get(f"{BASE_URL}/pages/loginform.jsp")
+
+    try:
+        driver.get(f"{BASE_URL}/pages/loginform.jsp")
+        print(f"  페이지 로드 완료: {driver.current_url}")
+    except Exception as e:
+        raise RuntimeError(f"로그인 페이지 열기 실패: {e}")
 
     wait = WebDriverWait(driver, PAGE_LOAD_WAIT)
-    wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
-    driver.find_element(By.ID, "password").send_keys(PASSWORD)
-    driver.find_element(By.ID, "submitButton").click()
+
+    try:
+        email_el = wait.until(EC.presence_of_element_located((By.ID, "email")))
+        print("  email 필드 찾음")
+        email_el.send_keys(EMAIL)
+    except Exception as e:
+        # ID가 다를 수 있음 — 페이지 소스 일부 출력
+        src = driver.page_source[:500]
+        raise RuntimeError(f"email 필드 못 찾음: {e}\n페이지 소스: {src}")
+
+    try:
+        driver.find_element(By.ID, "password").send_keys(PASSWORD)
+        print("  password 필드 입력 완료")
+    except Exception as e:
+        raise RuntimeError(f"password 필드 못 찾음: {e}")
+
+    try:
+        driver.find_element(By.ID, "submitButton").click()
+        print("  로그인 버튼 클릭 완료")
+    except Exception as e:
+        # submitButton ID가 다를 수 있음
+        try:
+            driver.find_element(By.XPATH, "//input[@type='submit']").click()
+            print("  로그인 버튼(submit) 클릭 완료")
+        except:
+            raise RuntimeError(f"로그인 버튼 못 찾음: {e}")
 
     time.sleep(6)
+    print(f"  로그인 후 URL: {driver.current_url}")
 
-    if "loginForm" in driver.current_url or "login" in driver.current_url.lower():
-        raise RuntimeError("로그인 실패 — 이메일/비밀번호 확인하세요")
+    if "loginForm" in driver.current_url or "/pages/login" in driver.current_url:
+        # 오류 메시지 찾기
+        try:
+            err = driver.find_element(By.CLASS_NAME, "errMsg").text
+            raise RuntimeError(f"로그인 실패: {err}")
+        except:
+            raise RuntimeError(f"로그인 실패 — 현재 URL: {driver.current_url}")
 
     print("  ✅ 로그인 성공")
 
