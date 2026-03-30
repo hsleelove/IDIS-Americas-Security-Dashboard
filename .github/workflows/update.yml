@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install requests pandas openpyxl lxml
+        run: pip install requests pandas openpyxl lxml selenium webdriver-manager
 
       - name: 폴더 생성
         run: mkdir -p output
