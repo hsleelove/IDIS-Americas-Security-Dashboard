@@ -2,13 +2,18 @@ name: IDIS Dashboard Update
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *'    # 매일 GMT 00:00 = KST 09:00
   workflow_dispatch:
+  push:
+    paths:
+      - '*.xls'
+      - '*.xlsx'
+      - 'data/**'
 
 jobs:
   update-dashboard:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: 저장소 체크아웃
@@ -22,60 +27,21 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install requests pandas openpyxl lxml selenium webdriver-manager
-
-      - name: Chrome 환경 진단
-        run: |
-          echo "=== Chrome 위치 ==="
-          which google-chrome || which chromium-browser || which chromium || echo "Chrome 없음"
-          echo "=== Chrome 버전 ==="
-          google-chrome --version 2>/dev/null || chromium-browser --version 2>/dev/null || chromium --version 2>/dev/null || echo "버전 확인 불가"
-          echo "=== ChromeDriver 위치 ==="
-          which chromedriver || echo "chromedriver 없음"
-          echo "=== ChromeDriver 버전 ==="
-          chromedriver --version 2>/dev/null || echo "버전 확인 불가"
-
-      - name: Selenium 연결 테스트
-        run: |
-          python3 -c "
-          from selenium import webdriver
-          from selenium.webdriver.chrome.options import Options
-          from selenium.webdriver.chrome.service import Service
-          from webdriver_manager.chrome import ChromeDriverManager
-          import os
-
-          options = Options()
-          options.add_argument('--headless=new')
-          options.add_argument('--no-sandbox')
-          options.add_argument('--disable-dev-shm-usage')
-          options.add_argument('--disable-gpu')
-
-          print('ChromeDriver 설치 중...')
-          service = Service(ChromeDriverManager().install())
-          print('Chrome 실행 중...')
-          driver = webdriver.Chrome(service=service, options=options)
-          print('Chrome 실행 성공!')
-          driver.get('https://www.google.com')
-          print('페이지 열기 성공:', driver.title)
-          driver.quit()
-          print('테스트 완료!')
-          "
+        run: pip install pandas openpyxl lxml requests google-api-python-client google-auth
 
       - name: 폴더 생성
-        run: mkdir -p output data
+        run: mkdir -p output
 
       - name: 파이프라인 실행
         env:
-          NS_EMAIL:     ${{ secrets.NS_EMAIL }}
-          NS_PASSWORD:  ${{ secrets.NS_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python run_pipeline.py --upload-github
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GDRIVE_FOLDER_ID:  ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+        run: python run_pipeline.py --skip-download --data-dir . --upload-gdrive
 
       - name: 결과 확인
         if: always()
-        run: |
-          echo "=== output ===" && ls -la output/ || echo "없음"
-          echo "=== data ===" && ls -la data/ || echo "없음"
+        run: ls -la output/ || echo "없음"
 
       - name: 아티팩트 저장
         uses: actions/upload-artifact@v4
