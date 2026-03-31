@@ -69,7 +69,9 @@ def upload_json(local_path):
     )
     results = service.files().list(
         q=query,
-        fields="files(id, name)"
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
     ).execute()
     existing = results.get("files", [])
 
@@ -84,7 +86,8 @@ def upload_json(local_path):
         file_id = existing[0]["id"]
         service.files().update(
             fileId=file_id,
-            media_body=media
+            media_body=media,
+            supportsAllDrives=True,
         ).execute()
         print(f"  ✅ 기존 파일 업데이트 (ID: {file_id})")
     else:
@@ -96,7 +99,8 @@ def upload_json(local_path):
         result = service.files().create(
             body=metadata,
             media_body=media,
-            fields="id"
+            fields="id",
+            supportsAllDrives=True,
         ).execute()
         file_id = result["id"]
         print(f"  ✅ 새 파일 생성 (ID: {file_id})")
@@ -105,6 +109,7 @@ def upload_json(local_path):
     service.permissions().create(
         fileId=file_id,
         body={"type": "anyone", "role": "reader"},
+        supportsAllDrives=True,
     ).execute()
 
     # 직접 다운로드 URL 생성
