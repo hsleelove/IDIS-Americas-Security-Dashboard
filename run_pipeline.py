@@ -48,8 +48,8 @@ GITHUB_TOKEN      = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_JSON_PATH  = "data/dashboard_data.json"
 
 # AWS S3 업로드 설정 (선택)
-S3_BUCKET         = os.environ.get("S3_BUCKET", "your-bucket-name")
-S3_KEY            = "dashboard/dashboard_data.json"
+S3_BUCKET         = os.environ.get("S3_BUCKET", "idis-dashboard-data")
+S3_KEY            = "dashboard_data.json"
 S3_REGION         = "us-east-1"
 
 
@@ -140,8 +140,6 @@ def upload_s3(json_path):
             ExtraArgs={
                 "ContentType":  "application/json",
                 "CacheControl": "no-cache, max-age=0",
-                # 퍼블릭 버킷인 경우 아래 줄 활성화:
-                # "ACL": "public-read",
             },
         )
         url = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{S3_KEY}"
