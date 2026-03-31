@@ -27,17 +27,16 @@ jobs:
           python-version: '3.11'
 
       - name: 패키지 설치
-        run: pip install pandas openpyxl lxml requests google-api-python-client google-auth
+        run: pip install pandas openpyxl lxml requests boto3
 
       - name: 폴더 생성
         run: mkdir -p output
 
       - name: 파이프라인 실행
         env:
-          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
-          GDRIVE_FOLDER_ID:  ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
-        run: python run_pipeline.py --skip-download --data-dir . --upload-gdrive
+          AWS_ACCESS_KEY_ID:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: python run_pipeline.py --skip-download --data-dir . --upload-s3
 
       - name: 결과 확인
         if: always()
