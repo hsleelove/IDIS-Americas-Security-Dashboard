@@ -164,8 +164,7 @@ def main():
                         help="GitHub Pages에 JSON 업로드")
     parser.add_argument("--upload-s3",     action="store_true",
                         help="AWS S3에 JSON 업로드")
-    parser.add_argument("--upload-gdrive", action="store_true",
-                        help="Google Drive에 JSON 업로드")
+
     parser.add_argument("--as-of",         default=None)
     parser.add_argument("--week",          default=None)
     args = parser.parse_args()
@@ -229,19 +228,10 @@ def main():
     elif args.upload_s3:
         print("\n[Step 4] S3 업로드")
         upload_s3(json_path)
-    elif args.upload_gdrive:
-        print("\n[Step 4] Google Drive 업로드")
-        try:
-            from gdrive_uploader import upload_json
-            url, file_id = upload_json(json_path)
-            print(f"  ✅ Google Drive 업로드 완료")
-            print(f"  URL: {url}")
-        except Exception as e:
-            print(f"  ❌ Google Drive 업로드 실패: {e}")
     else:
         print(f"\n[Step 4] 업로드 건너뜀")
         print(f"  로컬 파일: {Path(json_path).resolve()}")
-        print(f"  업로드하려면: --upload-gdrive 옵션 추가")
+        print(f"  업로드하려면: --upload-s3 옵션 추가")
 
     print("\n🎉 파이프라인 완료!")
 
