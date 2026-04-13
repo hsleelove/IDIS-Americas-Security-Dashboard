@@ -1,0 +1,2412 @@
+
+function onMonthToggle(){
+  selMonths=new Set();
+  document.querySelectorAll('.mo-cb:checked').forEach(cb=>selMonths.add(parseInt(cb.value)));
+  clearQuick();render();
+}
+function setQuick(p){
+  document.querySelectorAll('.mo-cb').forEach(cb=>cb.checked=false);selMonths=new Set();
+  if(p==='thismonth')selMonths.add(3);
+  else if(p==='lastmonth')selMonths.add(2);
+  else if(p==='nextmonth')selMonths.add(4);
+  else if(p==='thisquarter'){[1,2,3].forEach(m=>selMonths.add(m));}
+  else if(p==='ytd'){[1,2,3].forEach(m=>selMonths.add(m));}
+  selMonths.forEach(m=>{const cb=document.querySelector(`.mo-cb[value="${m}"]`);if(cb)cb.checked=true;});
+  clearQuick();document.querySelector(`.qbtn[data-q="${p}"]`)?.classList.add('active');render();
+}
+function clearQuick(){document.querySelectorAll('.qbtn').forEach(b=>b.classList.remove('active'));}
+function setTeam(t,btn){selTeam=t;document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');render();}
+function setPlType(t,btn){plTypeFilter=t;document.querySelectorAll('.pytbtn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');render();}
+function filtPipeline(rows){
+  let r=rows.filter(r=>selTeam==='All'||r.group===selTeam);
+  if(plTypeFilter==='Quote')r=r.filter(x=>x.type==='Quote');
+  else if(plTypeFilter==='Opportunity')r=r.filter(x=>x.type==='Opportunity');
+  return r;
+}
+function filtReps(){return Object.keys(D.rep_group).filter(r=>selTeam==='All'||D.rep_group[r]===selTeam);}
+
+function getRepRows(rep){
+  const ps=D.rep_pipeline_summary[rep];
+  if(ps&&ps.rows&&ps.rows.length)return ps.rows;
+  return D.pipeline.filter(r=>r.rep===rep);
+}
+
+function repMonthSum(rep){
+  const md=D.rep_monthly[rep];if(!md)return{target:0,booking:0,sales:0,pf:0,activity:0};
+  let t=0,b=0,s=0,p=0,a=0;
+  selMonths.forEach(m=>{
+    const mk=`2026-${String(m).padStart(2,'0')}`;
+    const d=md.monthly[mk];
+    if(d){t+=d.target||0;b+=d.booking||0;s+=d.sales||0;p+=d.pf||0;a+=d.activity||0;}
+  });
+  return{target:t,booking:b,sales:s,pf:p,activity:a};
+}
+
+// KPI
+function renderKPI(){
+  const reps=filtReps();
+  let totTgt=0,totBook=0,totSales=0;
+  reps.forEach(r=>{const s=repMonthSum(r);totTgt+=s.target;});
+  const curMk=D.as_of?D.as_of.slice(0,7):'2026-03';
+  const cm=D.company_monthly&&D.company_monthly[curMk];
+  totBook  = cm ? cm.booking : reps.reduce((a,r)=>{const s=repMonthSum(r);return a+s.booking;},0);
+  totSales = cm ? cm.sales   : reps.reduce((a,r)=>{const s=repMonthSum(r);return a+s.sales;},0);
+  const pl=filtPipeline(D.pipeline);
+  const plTotal=pl.reduce((a,r)=>a+r.amount,0);
+  const plQ=pl.filter(r=>r.type==='Quote').reduce((a,r)=>a+r.amount,0);
+  const plO=pl.filter(r=>r.type==='Opportunity').reduce((a,r)=>a+r.amount,0);
+  const expRows=filtPipeline(D.expired||[]);
+  const expTotal=expRows.reduce((a,r)=>a+r.amount,0);
+  document.getElementById('kpiRow').innerHTML=[
+    {l:'Target',         v:fM(totTgt),          s:fF(totTgt),                                          ac:'var(--amber)', fn:'_target_'},
+    {l:'MTD Bookings',   v:fM(totBook),          s:fF(totBook),   pct:totTgt>0?Math.round(totBook/totTgt*100):null,  ac:'var(--cyan)',  fn:'_booking_'},
+    {l:'Sales Result',   v:fM(totSales),         s:fF(totSales),  pct:totTgt>0?Math.round(totSales/totTgt*100):null, ac:'var(--green)', fn:'_sales_'},
+    {l:'Active Pipeline',v:fM(plTotal),          s:`${pl.length} deals · Q:${fM(plQ)} O:${fM(plO)}`,   ac:'var(--blue)', fn:'_pipeline_'},
+    {l:'Expired Quotes', v:expRows.length+' deals', s:fM(expTotal),                                    ac:'var(--red)',   fn:'_expired_'},
+  ].map((k,i)=>`<div class="kpi clickable" style="--ac:${k.ac}" onclick="_kpiClick(${i})">
+    <div class="kpi-lbl">${k.l}</div>
+    <div class="kpi-val" style="color:${k.ac}">${k.v}${k.pct!=null?`<span class="pct-pill ${k.pct>=100?'pct-over':'pct-under'}">${k.pct}%</span>`:''}</div>
+    <div class="kpi-sub">${k.s}</div>
+    <div style="font-size:9px;color:var(--muted);margin-top:2px">Click to review →</div>
+  </div>`).join('');
+  const b=document.getElementById('badge-kpi');
+  if(b)b.textContent=`Booking ${fM(totBook)}${totTgt>0?' ('+Math.round(totBook/totTgt*100)+'%)':''} · Sales ${fM(totSales)}`;
+}
+
+// PERF TABLE — Target | Booking | Sales Result | PF | Pipeline
+
+const _grpCollapsed={};
+function toggleGrpRows(grp){
+  _grpCollapsed[grp]=!_grpCollapsed[grp];
+  const hdr=document.getElementById('grphdr-'+grp);
+  if(hdr){
+    if(_grpCollapsed[grp]) hdr.classList.add('grp-collapsed');
+    else hdr.classList.remove('grp-collapsed');
+  }
+  document.querySelectorAll('.grp-member-'+grp).forEach(tr=>{
+    tr.style.display=_grpCollapsed[grp]?'none':'';
+  });
+}
+
+function renderPerfTable(){
+  const reps=filtReps();
+  const rows=reps.map(rep=>{
+    const s=repMonthSum(rep);
+    const ps=D.rep_pipeline_summary[rep];
+    const plF=filtPipeline(getRepRows(rep));
+    const hpRows=filtPipeline(getRepRows(rep)).filter(r=>r.prob>=0.75);
+    return{rep,grp:D.rep_group[rep],...s,
+      highprob:hpRows.reduce((a,r)=>a+r.amount,0),hp_count:hpRows.length,
+      pipeline:plF.reduce((a,r)=>a+r.amount,0),pl_count:plF.length};
+  });
+  const ck={name:'rep',group:'grp',target:'target',highprob:'highprob',booking:'booking',sales:'sales',pf:'pf',pipeline:'pipeline'};
+  rows.sort((a,b)=>{
+    const k=ck[perfSortCol]||'target';
+    let av=typeof a[k]==='string'?a[k].toLowerCase():a[k];
+    let bv=typeof b[k]==='string'?b[k].toLowerCase():b[k];
+    return perfSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);
+  });
+  // Group totals
+  const gt={};
+  rows.forEach(r=>{
+    if(!gt[r.grp])gt[r.grp]={target:0,booking:0,sales:0,pf:0,pipeline:0,pl_count:0};
+    const g=gt[r.grp];
+    g.target+=r.target;g.booking+=r.booking;g.sales+=r.sales;g.pf+=r.pf;g.pipeline+=r.pipeline;g.pl_count+=r.pl_count;
+    g.highprob=(g.highprob||0)+r.highprob;g.hp_count=(g.hp_count||0)+r.hp_count;
+  });
+  if(!_perfCols) _perfCols=[
+    {k:'name',l:'Sales Rep',cls:''},
+    {k:'group',l:'Team',cls:''},
+    {k:'target',l:'Target',cls:''},
+    {k:'highprob',l:'High Prob Pipeline',cls:'col-hp'},
+    {k:'booking',l:'MTD Booking',cls:''},
+    {k:'sales',l:'Sales Result ★',cls:'col-sales'},
+    {k:'pf',l:'Pending PF',cls:''},
+    {k:'pipeline',l:'Active Pipeline',cls:''},
+  ];
+  const cols=_perfCols;
+  let h=`<thead><tr>${cols.map(c=>`<th class="${c.cls} ${perfSortCol===c.k?(perfSortDir==='asc'?'asc':'desc'):''}" onclick="sortPerf('${c.k}')">${c.l}<span class="si"></span></th>`).join('')}</tr></thead><tbody>`;
+  const groups=['East','West','National'];
+  if(selTeam==='All'){
+    groups.forEach(grp=>{
+      const g=gt[grp];if(!g)return;
+      const bpct=g.target>0?Math.round(g.booking/g.target*100):null;
+      const spct=g.target>0?Math.round(g.sales/g.target*100):null;
+      h+=`<tr class="group-hrow" id="grphdr-${grp}" onclick="toggleGrpRows('${grp}')" title="Click to collapse/expand">
+        <td style="color:${gCol[grp]}"><span class="grp-toggle">▾</span>${grp.toUpperCase()}</td><td></td>
+        <td class="t-tgt">${fF(g.target)}</td>
+        <td class="col-hp" style="color:var(--amber);font-weight:600">${g.highprob>0?fF(g.highprob)+'<span style="font-size:9px;color:var(--muted)"> ('+g.hp_count+')</span>':'<span style="color:var(--muted2)">—</span>'}</td>
+        <td class="t-book">${fF(g.booking)}${bpct!=null?`<span class="pct-sm ${bpct>=100?'over':'under'}">${bpct}%</span>`:''}</td>
+        <td class="t-sales col-sales">${fF(g.sales)}${spct!=null?`<span class="pct-sm ${spct>=100?'over':'under'}">${spct}%</span>`:''}</td>
+        <td class="t-pf">${fF(g.pf)}</td>
+        <td style="color:var(--blue);font-weight:700">${fF(g.pipeline)} <span style="font-size:9px;color:var(--muted)">(${g.pl_count})</span></td>
+      </tr>`;
+      rows.filter(r=>r.grp===grp).forEach(r=>h+=repRow(r,true,grp));
+    });
+  } else {rows.forEach(r=>h+=repRow(r,false));}
+  const curMkU=D.as_of?D.as_of.slice(0,7):'2026-03';
+  const unMU=D.unassigned_monthly&&D.unassigned_monthly[curMkU];
+  if(unMU&&(unMU.booking>0||unMU.sales>0)){
+    h+=`<tr style="background:rgba(107,114,128,.06)">
+      <td style="padding-left:4px;cursor:default"><span style="font-size:10px;font-style:italic;color:var(--muted)">Unassigned</span></td>
+      <td><span style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:8px;color:var(--muted2)">former / unlinked</span></td>
+      <td class="t-tgt" style="color:var(--muted2)">—</td>
+      <td class="col-hp" style="color:var(--muted2)">—</td>
+      <td class="t-book" style="color:var(--muted);cursor:pointer" onclick="openUnassignedBooking()" title="Click for unassigned detail">${unMU.booking>0?fF(unMU.booking):'—'}</td>
+      <td class="t-sales col-sales" style="color:var(--muted)">${unMU.sales>0?fF(unMU.sales):'—'}</td>
+      <td class="t-pf" style="color:var(--muted2)">—</td>
+      <td style="color:var(--muted2)">—</td>
+    </tr>`;
+  }
+  document.getElementById('perfTable').innerHTML=h+'</tbody>';
+  const b=document.getElementById('badge-perf');
+  if(b){const tot=rows.filter(r=>r.target>0||r.booking>0).length;b.textContent=`${tot} Reps`;}
+  setTimeout(initPerfDnD, 0);
+}
+function repRow(r,indent,grpKey){
+  const bpct=r.target>0?Math.round(r.booking/r.target*100):null;
+  const spct=r.target>0?Math.round(r.sales/r.target*100):null;
+  const repQ=r.rep.replace(/'/g,"\\'");
+  const selMoList=[...selMonths].join(',');
+  return `<tr ${grpKey?`class="grp-member-${grpKey}"`:''} >
+    <td onclick="openRepDetail('${repQ}')" style="cursor:pointer;color:var(--blue)">
+      <span style="padding-left:${indent?'16':'4'}px">${r.rep.length>24?r.rep.slice(0,23)+'…':r.rep}</span>
+    </td>
+    <td><span class="gb ${r.grp}">${r.grp}</span></td>
+    <td class="t-tgt" onclick="openRawData('target','${repQ}','${selMoList}')" style="cursor:pointer" title="Click for raw data">${fF(r.target)}</td>
+    <td class="col-hp" onclick="openRawData('highprob','${repQ}','${selMoList}')" style="cursor:pointer;color:var(--amber)" title="Click for high prob deals">
+      ${r.highprob>0?fF(r.highprob)+'<span style="font-size:9px;color:var(--muted)"> ('+r.hp_count+')</span>':'<span style="color:var(--muted2)">—</span>'}
+    </td>
+    <td class="t-book" onclick="openRawData('booking','${repQ}','${selMoList}')" style="cursor:pointer" title="Click for raw data">
+      ${fF(r.booking)}${bpct!=null?`<span class="pct-sm ${bpct>=100?'over':'under'}">${bpct}%</span>`:''}
+    </td>
+    <td class="t-sales col-sales" onclick="openRawData('sales','${repQ}','${selMoList}')" style="cursor:pointer" title="Click for raw data">
+      ${r.sales>0?fF(r.sales):'<span style="color:var(--muted2)">-</span>'}${spct!=null&&r.sales>0?`<span class="pct-sm ${spct>=100?'over':'under'}">${spct}%</span>`:''}
+    </td>
+    <td class="t-pf" onclick="openRawData('pf_rep','${repQ}','${selMoList}')" style="cursor:pointer" title="Click for PF details">
+      ${r.pf>0?fF(r.pf):'<span style="color:var(--muted2)">-</span>'}
+    </td>
+    <td onclick="openRawData('pipeline','${repQ}','${selMoList}')" style="cursor:pointer;color:var(--blue);font-weight:600" title="Click for pipeline details">
+      ${fF(r.pipeline)} <span style="font-size:9px;color:var(--muted)">(${r.pl_count})</span>
+    </td>
+  </tr>`;
+}
+function sortPerf(col){if(perfSortCol===col)perfSortDir=perfSortDir==='asc'?'desc':'asc';else{perfSortCol=col;perfSortDir='desc';}renderPerfTable();}
+function exportPerfCSV(){
+  const reps=filtReps();
+  let csv='SalesRep,Team,Target,MTD_Booking,Booking_Att%,Sales_Result,Sales_Att%,PendingPF,ActivePipeline,PL_Deals\n';
+  reps.forEach(rep=>{
+    const s=repMonthSum(rep);
+    const ps=D.rep_pipeline_summary[rep];
+    const plRows=filtPipeline(getRepRows(rep));
+    const pl=plRows.reduce((a,r)=>a+r.amount,0);
+    const bpct=s.target>0?Math.round(s.booking/s.target*100):0;
+    const spct=s.target>0?Math.round(s.sales/s.target*100):0;
+    csv+=`"${rep}",${D.rep_group[rep]},${s.target.toFixed(0)},${s.booking.toFixed(0)},${bpct}%,${s.sales.toFixed(0)},${spct}%,${s.pf.toFixed(0)},${pl.toFixed(0)},${plRows.length}\n`;
+  });
+  dlCSV(csv,'performance_table.csv');
+}
+
+// ACTIVITY TABLE
+
+const _actGrpCollapsed={};
+function toggleActGrpRows(grp){
+  _actGrpCollapsed[grp]=!_actGrpCollapsed[grp];
+  const hdr=document.getElementById('actgrphdr-'+grp);
+  if(hdr){hdr.classList.toggle('grp-collapsed',_actGrpCollapsed[grp]);}
+  document.querySelectorAll('.grp-member-act-'+grp).forEach(tr=>{
+    tr.style.display=_actGrpCollapsed[grp]?'none':'';
+  });
+}
+
+function renderActivityTable(){
+  const reps=filtReps();
+  const allMo=[1,2,3,4,5,6,7,8,9,10,11,12];
+  const curMo=[...selMonths];
+  const actYr=actSelYear||parseInt((D.as_of||'2026').slice(0,4));
+
+  const rows=reps.map(rep=>{
+    const act=D.activity&&D.activity[rep];
+    const monthly={};let total=0;
+    allMo.forEach(m=>{
+      let cnt=0;
+      if(act&&act.monthly){
+        if(actSelYear===0){
+          // All years: sum all YYYY-MM matching this month
+          Object.entries(act.monthly).forEach(([mk,v])=>{
+            if(parseInt(mk.slice(5))===m) cnt+=v;
+          });
+        } else {
+          const mk=`${actYr}-${String(m).padStart(2,'0')}`;
+          cnt=(act.monthly[mk])||0;
+        }
+      }
+      monthly[m]=cnt;
+      if(curMo.includes(m)) total+=cnt;
+    });
+    return{rep,grp:D.rep_group[rep]||'',monthly,total};
+  }).filter(r=>allMo.some(m=>r.monthly[m]>0));
+
+  rows.sort((a,b)=>{
+    if(actSortCol==='rep') return actSortDir==='asc'?a.rep.localeCompare(b.rep):b.rep.localeCompare(a.rep);
+    if(actSortCol==='group') return actSortDir==='asc'?a.grp.localeCompare(b.grp):b.grp.localeCompare(a.grp);
+    if(actSortCol.startsWith('m')){const mo=parseInt(actSortCol.slice(1));return actSortDir==='asc'?a.monthly[mo]-b.monthly[mo]:b.monthly[mo]-a.monthly[mo];}
+    return actSortDir==='asc'?a.total-b.total:b.total-a.total;
+  });
+
+  const grpTot={};
+  rows.forEach(r=>{
+    if(!grpTot[r.grp])grpTot[r.grp]={monthly:{},total:0};
+    allMo.forEach(m=>{grpTot[r.grp].monthly[m]=(grpTot[r.grp].monthly[m]||0)+r.monthly[m];});
+    grpTot[r.grp].total+=r.total;
+  });
+
+  const sc=col=>actSortCol===col?(actSortDir==='asc'?'asc':'desc'):'';
+  // Only show months that have data for selected year
+  const visMo=actSelYear===0?allMo:allMo.filter(m=>{
+    const mk=`${actYr}-${String(m).padStart(2,'0')}`;
+    return rows.some(r=>r.monthly[m]>0)||(curMo.includes(m)&&actYr===parseInt((D.as_of||'2026').slice(0,4)));
+  });
+  // Always show Jan-current month for current year
+  const displayMo=actSelYear===0?allMo:(()=>{
+    const curY=parseInt((D.as_of||'2026').slice(0,4));
+    const curM=parseInt((D.as_of||'2026-03').slice(5,7));
+    if(actYr===curY) return allMo.filter(m=>m<=curM);
+    return visMo.filter(m=>rows.some(r=>r.monthly[m]>0));
+  })();
+
+  const thMo=displayMo.map(m=>{
+    const hl=curMo.includes(m)&&(actSelYear===0||actYr===parseInt((D.as_of||'2026').slice(0,4)));
+    return `<th class="${sc('m'+m)}" onclick="sortAct('m${m}')" style="${hl?'background:rgba(124,58,237,.08);color:var(--purple)':''}">${MO[m]}<span class="si"></span></th>`;
+  }).join('');
+
+  let h=`<thead><tr>
+    <th class="${sc('rep')}" onclick="sortAct('rep')">Sales Rep<span class="si"></span></th>
+    <th class="${sc('group')}" onclick="sortAct('group')" style="text-align:center">Team<span class="si"></span></th>
+    ${thMo}
+    <th class="${sc('total')}" onclick="sortAct('total')" style="background:rgba(124,58,237,.06);color:var(--purple)">Total<span class="si"></span></th>
+  </tr></thead><tbody>`;
+
+  const groups=['East','West','National'];
+  if(selTeam==='All'){
+    groups.forEach(grp=>{
+      const g=grpTot[grp];if(!g)return;
+      const moTds=displayMo.map(m=>{
+        const v=g.monthly[m]||0;
+        const hl=curMo.includes(m)&&(actSelYear===0||actYr===parseInt((D.as_of||'2026').slice(0,4)));
+        return `<td style="${hl?'background:rgba(124,58,237,.05)':''}" class="${v>0?'act-cur':'act-zero'}">${v||'-'}</td>`;
+      }).join('');
+      h+=`<tr class="group-hrow" id="actgrphdr-${grp}" onclick="toggleActGrpRows('${grp}')" title="Click to collapse/expand" style="cursor:pointer"><td style="color:${gCol[grp]}"><span class="grp-toggle">▾</span>${grp.toUpperCase()}</td><td></td>${moTds}<td style="color:var(--purple);font-weight:800">${g.total}</td></tr>`;
+      rows.filter(r=>r.grp===grp).forEach(r=>{
+        const moTds2=displayMo.map(m=>{
+          const v=r.monthly[m]||0;
+          const hl=curMo.includes(m)&&(actSelYear===0||actYr===parseInt((D.as_of||'2026').slice(0,4)));
+          return `<td style="${hl?'background:rgba(124,58,237,.04)':''}" class="${v>0?'act-cur act-clickable':'act-zero'}"
+            ${v>0?`onclick="openActCell('${r.rep.replace(/'/g,"\\'")}',${m},${actYr===0?0:actYr})"`:''}>
+            ${v||'-'}</td>`;
+        }).join('');
+        h+=`<tr>
+          <td onclick="openRepActivity('${r.rep.replace(/'/g,"\\'")}')" style="cursor:pointer;color:var(--blue)">
+            <span style="padding-left:16px">${r.rep.length>24?r.rep.slice(0,23)+'…':r.rep}</span></td>
+          <td style="text-align:center"><span class="gb ${r.grp}">${r.grp}</span></td>
+          ${moTds2}
+          <td class="act-cur" onclick="openRepActivity('${r.rep.replace(/'/g,"\\'")}')" style="cursor:pointer;color:var(--purple);font-weight:700">${r.total||'-'}</td>
+        </tr>`;
+      });
+    });
+  } else {
+    rows.forEach(r=>{
+      const moTds=displayMo.map(m=>{
+        const v=r.monthly[m]||0;
+        const hl=curMo.includes(m)&&(actSelYear===0||actYr===parseInt((D.as_of||'2026').slice(0,4)));
+        return `<td style="${hl?'background:rgba(124,58,237,.04)':''}" class="${v>0?'act-cur act-clickable':'act-zero'}"
+          ${v>0?`onclick="openActCell('${r.rep.replace(/'/g,"\\'")}',${m},${actYr===0?0:actYr})"`:''}>
+          ${v||'-'}</td>`;
+      }).join('');
+      h+=`<tr>
+        <td onclick="openRepActivity('${r.rep.replace(/'/g,"\\'")}')" style="cursor:pointer;color:var(--blue)">
+          <span style="padding-left:4px">${r.rep.length>24?r.rep.slice(0,23)+'…':r.rep}</span></td>
+        <td style="text-align:center"><span class="gb ${r.grp}">${r.grp}</span></td>
+        ${moTds}
+        <td class="act-cur" onclick="openRepActivity('${r.rep.replace(/'/g,"\\'")}')" style="cursor:pointer;color:var(--purple);font-weight:700">${r.total||'-'}</td>
+      </tr>`;
+    });
+  }
+
+  document.getElementById('actTable').innerHTML=h+'</tbody>';
+  const b=document.getElementById('badge-act');
+  if(b){
+    const tot=rows.reduce((a,r)=>a+r.total,0);
+    const yrLabel=actSelYear===0?'All Years':String(actYr);
+    b.textContent=`${tot} Activities · ${yrLabel}`;
+  }
+}
+function sortAct(col){if(actSortCol===col)actSortDir=actSortDir==='asc'?'desc':'asc';else{actSortCol=col;actSortDir='desc';}renderActivityTable();}
+function exportActCSV(){
+  const reps=filtReps();const allMo=[1,2,3,4,5,6,7,8,9];
+  let csv='SalesRep,Team,'+allMo.map(m=>MO[m]).join(',')+',Total\n';
+  reps.forEach(rep=>{const act=D.activity&&D.activity[rep];const mos=allMo.map(m=>{const mk=`2026-${String(m).padStart(2,'0')}`;return (act&&act.monthly&&act.monthly[mk])||0;});csv+=`"${rep}",${D.rep_group[rep]},${mos.join(',')},${mos.reduce((a,b)=>a+b,0)}\n`;});
+  dlCSV(csv,'activity_table.csv');
+}
+
+// PIPELINE
+function renderBar(){
+  const reps=filtReps();
+  const data=reps.map(rep=>{const ps=D.rep_pipeline_summary[rep];const pl=filtPipeline(getRepRows(rep));return{rep,grp:D.rep_group[rep],total:pl.reduce((a,r)=>a+r.amount,0)};}).sort((a,b)=>b.total-a.total).slice(0,15);
+  const mx=data.length?data[0].total:1;
+  document.getElementById('barList').innerHTML=data.map(r=>`<div class="bar-item" onclick="openRepPipeline('${r.rep.replace(/'/g,"\\'")}') " title="Click to see ${r.rep}'s pipeline">
+    <div class="bar-rep">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px">${r.rep}</span>
+      <span class="gb ${r.grp}" style="font-size:7px;padding:1px 3px">${r.grp[0]}</span>
+    </div>
+    <div class="bar-track"><div class="bar-fill bf-${r.grp[0]}" style="width:${(r.total/mx*100).toFixed(1)}%"></div></div>
+    <div class="bar-val">${fM(r.total)}</div>
+  </div>`).join('');
+  const b=document.getElementById('badge-pl');
+  if(b){const tot=filtPipeline(D.pipeline).reduce((a,r)=>a+r.amount,0);const cnt=filtPipeline(D.pipeline).length;b.textContent=`${cnt} deals · ${fM(tot)}`;}
+}
+function renderProbGrid(){
+  const pOrder=['10','30','50','70','90'];const pl=filtPipeline(D.pipeline);
+  const maxA=Math.max(1,...pOrder.map(p=>pl.filter(r=>Math.round(r.prob*100)==parseInt(p)).reduce((a,r)=>a+r.amount,0)));
+  document.getElementById('probGrid').innerHTML=pOrder.map(p=>{const pr=pl.filter(r=>Math.round(r.prob*100)==parseInt(p));const tot=pr.reduce((a,r)=>a+r.amount,0);return `<div class="ps-card" style="--pc:${pCol[p]}" onclick="openProbDetail('${p}')"><div class="ps-pct">${p}%</div><div class="ps-cnt">${pr.length} deals</div><div class="ps-amt">${fM(tot)}</div><div class="ps-bar"><div class="ps-bar-fill" style="width:${(tot/maxA*100).toFixed(1)}%"></div></div></div>`;}).join('');
+}
+function renderProbSummary(){
+  const pOrder=['10','30','50','70','90'];
+  const getPD=p=>{const pd=D.prob_detail[p];if(!pd)return{count:0,total:0,rows:[]};const rows=pd.rows||[];return{count:rows.length,total:rows.reduce((a,r)=>a+r.amount,0),rows};};
+  const maxA=Math.max(1,...pOrder.map(p=>getPD(p).total));
+  document.getElementById('probSummary').innerHTML=pOrder.map(p=>{const d=getPD(p);return `<div class="ps-card" style="--pc:${pCol[p]}" onclick="openProbDetail('${p}')"><div class="ps-pct">${p}%</div><div class="ps-cnt">${d.count} deals</div><div class="ps-amt">${fM(d.total)}</div><div class="ps-bar"><div class="ps-bar-fill" style="width:${(d.total/maxA*100).toFixed(1)}%"></div></div></div>`;}).join('');
+}
+
+// OVERLAY
+
+function openUnassignedBooking(){
+  const curMk=D.as_of?D.as_of.slice(0,7):'2026-03';
+  const mo=parseInt(curMk.split('-')[1]);
+  const unMU=D.unassigned_monthly&&D.unassigned_monthly[curMk];
+  if(!unMU||!unMU.detail)return;
+  const rows=[];
+  Object.entries(unMU.detail).forEach(([rep,info])=>{
+    if(info.booking>0) rows.push({rep,booking:info.booking});
+  });
+  rows.sort((a,b)=>b.booking-a.booking);
+  const total=rows.reduce((a,r)=>a+r.booking,0);
+  const mo_name=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][mo]||'';
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">Unassigned Booking</div>
+    <div class="d-sub">${mo_name} 2026 · Former reps / unlinked SOs</div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Total</div><div class="d-kpi-v" style="color:var(--amber)">${fM(total)}</div><div class="d-kpi-s">${rows.length} reps</div></div>
+    </div>
+    <table class="dt" style="width:100%;margin-top:12px">
+      <thead><tr><th style="text-align:left">Rep (former/unlinked)</th><th style="text-align:right">Booking</th></tr></thead>
+      <tbody>
+        ${rows.map(r=>`<tr><td style="color:var(--muted)">${r.rep||'(unknown)'}</td><td style="text-align:right">${fF(r.booking)}</td></tr>`).join('')}
+        <tr style="font-weight:700;border-top:2px solid var(--border)">
+          <td>Total</td><td style="text-align:right">${fF(total)}</td>
+        </tr>
+      </tbody>
+    </table>`;
+  openOv();
+}
+
+function openOv(){document.getElementById('ov').classList.add('open');document.body.style.overflow='hidden';}
+function closeOv(){document.getElementById('ov').classList.remove('open');document.body.style.overflow='';}
+function handleOvClick(e){if(e.target===document.getElementById('ov'))closeOv();}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeOv();});
+
+// REP DETAIL (pipeline panel)
+function openRepDetail(rep){
+  _repDetailRep=rep; _repDetailMo='all';
+  const ps=D.rep_pipeline_summary[rep];const grp=D.rep_group[rep];const gc=gCol[grp]||'#2563eb';
+  const rm=D.rep_monthly[rep];const tgts=D.rep_targets[rep]||{};
+  const fyTgt=Object.values(tgts).reduce((a,b)=>a+b,0);
+  const plRows=filtPipeline(getRepRows(rep));const plTotal=plRows.reduce((a,r)=>a+r.amount,0);
+  const plQc=plRows.filter(r=>r.type==='Quote').length;const plOc=plRows.filter(r=>r.type==='Opportunity').length;
+  const plQ=plRows.filter(r=>r.type==='Quote').reduce((a,r)=>a+r.amount,0);
+  const plO=plRows.filter(r=>r.type==='Opportunity').reduce((a,r)=>a+r.amount,0);
+  repSortCol='amount';repSortDir='desc';detailPage=0;
+  const months=D.all_months.filter(mk=>parseInt(mk.split('-')[1])<=9);
+  let moHtml='';
+  months.forEach(mk=>{
+    const[y,m]=mk.split('-');const d=rm&&rm.monthly[mk];if(!d)return;
+    const tgt=tgts[parseInt(m)]||0;
+    const bpct=tgt>0?Math.round(d.booking/tgt*100):null;
+    const spct=tgt>0&&d.sales>0?Math.round(d.sales/tgt*100):null;
+    moHtml+=`<tr>
+      <td style="color:var(--muted);font-weight:600">${MO[parseInt(m)]} ${y}</td>
+      <td class="t-tgt">${fF(tgt)}</td>
+      <td class="t-book">${fF(d.booking)}${bpct!=null?`<span class="pct-sm ${bpct>=100?'over':'under'}">${bpct}%</span>`:''}</td>
+      <td class="t-sales">${d.sales>0?fF(d.sales):'<span style="color:var(--muted2)">-</span>'}${spct!=null?`<span class="pct-sm ${spct>=100?'over':'under'}">${spct}%</span>`:''}</td>
+      <td class="t-pf">${d.pf>0?fF(d.pf):'<span style="color:var(--muted2)">-</span>'}</td>
+      <td class="t-act" style="text-align:right">${d.activity||'-'}</td>
+    </tr>`;
+  });
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">${rep} <span class="gb ${grp}" style="font-size:11px;padding:3px 9px">${grp}</span></div>
+    <div class="d-sub">Performance Detail · ${D.week_tag} · As of ${D.as_of}</div>
+    <div id="repMoFilter" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:12px">
+      <span style="font-size:9px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin-right:2px;white-space:nowrap">Filter Month</span>
+      <button class="pdf-btn on" onclick="setRepMo('all',this)">All</button>
+      ${['2026-01','2026-02','2026-03','2026-04','2026-05','2026-06','2026-07','2026-08','2026-09'].map((mk)=>{const m=parseInt(mk.split('-')[1]);const d=rm&&rm.monthly[mk];const has=d&&(d.booking>0||d.sales>0||d.target>0);return has?`<button class="pdf-btn" onclick="setRepMo('${mk}',this)">${MO[m]}</button>`:''}).filter(Boolean).join('')}
+    </div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">FY26 Target</div><div class="d-kpi-v" style="color:${gc}">${fM(fyTgt)}</div><div class="d-kpi-s">${fF(fyTgt)}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Active Pipeline</div><div class="d-kpi-v">${fM(plTotal)}</div><div class="d-kpi-s">${plRows.length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Q / Opp Count</div><div class="d-kpi-v">${plQc} / ${plOc}</div><div class="d-kpi-s">${fM(plQ)} / ${fM(plO)}</div></div>
+    </div>
+    <div class="d-sec">Monthly Performance (Target → Booking → Sales Result → PF → Activity)</div>
+    <div style="overflow-x:auto"><table class="dt">
+      <thead><tr><th>Month</th><th>Target</th><th>MTD Booking</th><th style="color:var(--green)">Sales Result ★</th><th>Pending PF</th><th>Activities</th></tr></thead>
+      <tbody id="repMoTbody">${moHtml}</tbody>
+    </table></div>
+    <div class="d-sec">Prob% Breakdown</div>
+    <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:4px">${Object.entries(ps&&ps.prob_breakdown||{}).map(([k,v])=>`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:7px;padding:7px 10px;min-width:75px"><div style="font-size:13px;font-weight:800;color:${pCol[k]||'#666'}">${k}%</div><div style="font-size:9px;color:var(--muted)">${v.count} deals</div><div style="font-size:11px;font-weight:600;color:var(--text2);margin-top:2px">${fM(v.total)}</div></div>`).join('')}</div>
+    <div class="d-sec"><span>Pipeline List</span><span style="flex:1"></span><button class="csv-btn" onclick="exportRepCSV('${rep.replace(/'/g,"\\'")}')">📥 CSV</button></div>
+    <div id="repTableWrap"></div><div id="repPager"></div>`;
+  renderRepTable(rep);openOv();
+}
+function renderRepTable(rep){
+  const ps=D.rep_pipeline_summary[rep];if(!ps||!ps.rows){document.getElementById('repTableWrap').innerHTML='<div style="padding:12px;color:var(--muted)">No pipeline data</div>';return;}
+  let rows=filtPipeline([...ps.rows]);
+  rows.sort((a,b)=>{let av=a[repSortCol],bv=b[repSortCol];if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}return repSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);});
+  const total=rows.length;const page=rows.slice(detailPage*PAGE_SZ,(detailPage+1)*PAGE_SZ);
+  const cols=[{k:'doc',l:'Doc #'},{k:'type',l:'Ty'},{k:'status',l:'Status'},{k:'company',l:'Company'},{k:'prob',l:'Prob'},{k:'amount',l:'Amount'},{k:'exp_close',l:'Exp Close'},{k:'created',l:'Created'}];
+  let h=`<table class="dt"><thead><tr>${cols.map(c=>`<th class="${repSortCol===c.k?(repSortDir==='asc'?'asc':'desc'):''}" onclick="sortRepT('${rep.replace(/'/g,"\\'")}','${c.k}')">${c.l}<span class="si"></span></th>`).join('')}</tr></thead><tbody>`;
+  page.forEach(r=>{const isExp=r.expired;h+=`<tr${isExp?' class="exp-row"':''}><td class="dt-doc">${r.doc}</td><td><span class="gb" style="font-size:8px;padding:1px 4px;${r.type==='Quote'?'background:rgba(37,99,235,.1);color:var(--blue)':'background:rgba(217,119,6,.1);color:var(--amber)'}">${r.type[0]}</span></td><td style="font-size:9px;color:var(--muted)">${STATUS_SHORT[r.status]||r.status}</td><td style="font-size:10px;color:var(--text2)">${r.company.length>28?r.company.slice(0,27)+'…':r.company}</td><td><span class="${pCls[r.prob]||''}" style="font-weight:700">${Math.round(r.prob*100)}%</span></td><td class="dt-amt ${pCls[r.prob]||''}">${fF(r.amount)}</td><td class="${isExp?'exp-date':'dt-dt'}">${r.exp_close?r.exp_close.slice(0,10):'-'}</td><td class="dt-dt">${r.created}</td></tr>`;});
+  document.getElementById('repTableWrap').innerHTML=h+'</tbody></table>';
+  const tp=Math.ceil(total/PAGE_SZ);
+  document.getElementById('repPager').innerHTML=total>PAGE_SZ?`<div class="pager"><button class="pg-btn" onclick="changePg('${rep.replace(/'/g,"\\'")}',${detailPage-1})" ${detailPage===0?'disabled':''}>← Prev</button><span>Page ${detailPage+1} / ${tp} (${total} deals)</span><button class="pg-btn" onclick="changePg('${rep.replace(/'/g,"\\'")}',${detailPage+1})" ${detailPage>=tp-1?'disabled':''}>Next →</button></div>`:'';
+}
+function changePg(rep,pg){detailPage=pg;renderRepTable(rep);}
+function sortRepT(rep,col){if(repSortCol===col)repSortDir=repSortDir==='asc'?'desc':'asc';else{repSortCol=col;repSortDir='desc';}detailPage=0;renderRepTable(rep);}
+function exportRepCSV(rep){const ps=D.rep_pipeline_summary[rep];if(!ps)return;const rows=filtPipeline([...ps.rows]);let csv='Doc,Type,Status,Company,Prob%,Amount,ExpClose,Created\n';rows.forEach(r=>{csv+=[r.doc,r.type,'"'+r.status+'"','"'+r.company+'"',Math.round(r.prob*100)+'%',r.amount,r.exp_close,r.created].join(',')+'\n';});dlCSV(csv,rep.replace(/\s+/g,'_')+'_pipeline.csv');}
+
+// REP ACTIVITY DETAIL
+function openRepActivity(rep){
+  _actMoSelected=new Set();
+  _actPopupRep=rep;
+  const act=D.activity&&D.activity[rep];
+  if(!act){document.getElementById('dc').innerHTML=`<div class="d-name">${rep}</div><div style="color:var(--muted);padding:20px">No activity data</div>`;openOv();return;}
+  const allMo=[1,2,3,4,5,6,7,8,9];
+  const actYr=actSelYear===0?null:(actSelYear||parseInt((D.as_of||'2026').slice(0,4)));
+  const allLog=(act.log||[]);
+  const detail=allLog.filter(a=>{
+    const date=a.date||'';
+    const eYr=parseInt(date.slice(0,4));
+    const eMo=parseInt(date.slice(5,7));
+    return (actYr===null||eYr===actYr)&&[...selMonths].includes(eMo);
+  });
+    // Count from logs for accuracy
+  const totSel=allLog.filter(a=>{
+    const date=a.date||'';
+    const eYr=parseInt(date.slice(0,4));
+    const eMo=parseInt(date.slice(5,7));
+    return (actYr===null||eYr===actYr)&&[...selMonths].includes(eMo);
+  }).length;
+  const totAll=allLog.filter(a=>{
+    const eYr=parseInt((a.date||'').slice(0,4));
+    return actYr===null||eYr===actYr;
+  }).length;
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">${rep} <span class="gb ${D.rep_group[rep]}" style="font-size:11px;padding:3px 9px">${D.rep_group[rep]}</span></div>
+    <div class="d-sub">Activity Detail · As of ${D.as_of}</div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Selected Months</div><div class="d-kpi-v" style="color:var(--purple)">${totSel}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">YTD 2026 Total</div><div class="d-kpi-v">${totAll}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Log Entries</div><div class="d-kpi-v">${detail.length}</div></div>
+    </div>
+    <div class="d-sec">Monthly Breakdown <span style="font-size:9px;color:var(--muted);font-weight:400">— click month to filter log</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px" id="actMoChips">${allMo.map(m=>{
+      const mk=actYr===null?null:`${actYr}-${String(m).padStart(2,'0')}`;
+      const v=mk?(act.monthly[mk]||0):Object.entries(act.monthly||{}).filter(([k])=>parseInt(k.slice(5))===m).reduce((s,[,c])=>s+c,0);
+      const hl=[...selMonths].includes(m);
+      const zero=v===0;
+      return `<div class="mo-chip${hl?' on':''}${zero?' mo-chip-zero':''}" id="mochip-${m}" onclick="${zero?'':'toggleActMoChip('+m+',this)'}" title="${MO[m]}">
+        <div class="mo-chip-name">${MO[m]}</div>
+        <div class="mo-chip-val">${v||'·'}</div>
+      </div>`;
+    }).join('')}</div>
+    <div class="d-sec"><span id="actLogLabel">Activity Log</span><span style="flex:1"></span><button class="csv-btn" onclick="exportActDetail('${rep.replace(/'/g,"\\'")}')">📥 CSV</button></div>
+    <div id="actLogBody"><table class="dt"><thead><tr><th>Date</th><th>Company</th><th>Event / Note</th></tr></thead><tbody>${
+      detail.sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(a=>`<tr>
+        <td class="dt-dt">${a.date||'-'}</td>
+        <td style="font-size:10px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(a.company||'').replace(/"/g,'&quot;')}">${a.company&&a.company!=='nan'?a.company:'-'}</td>
+        <td style="font-size:10px;color:var(--muted)">${a.event||'-'}</td>
+      </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:12px">No activity in selected months</td></tr>'
+    }</tbody></table></div>`;
+  openOv();
+}
+function exportActDetail(rep){const act=D.activity&&D.activity[rep];if(!act)return;const detail=(act.detail_2026||[]).filter(a=>[...selMonths].includes(a.month));let csv='Date,Company,Event,Month,Week\n';detail.forEach(a=>{csv+=`${a.date},"${a.company||''}","${a.event||''}",${a.month},${a.week}\n`;});dlCSV(csv,rep.replace(/\s+/g,'_')+'_activity.csv');}
+
+// EXPIRED
+// ── EXPIRED DETAIL ────────────────────────────────────────────
+let expSortCol='amount', expSortDir='desc';
+
+function openExpiredDetail(){
+  expSortCol='amount'; expSortDir='desc';
+  const rows=filtPipeline(D.expired||[]);
+  const tot=rows.reduce((a,r)=>a+r.amount,0);
+  const vacantCount=rows.filter(r=>r.rep==='Vacant').length;
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name" style="color:var(--red)">⚠ Expired Deals</div>
+    <div class="d-sub">Past expected close date · ${D.as_of}</div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Count</div><div class="d-kpi-v" style="color:var(--red)">${rows.length}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Total Amount</div><div class="d-kpi-v" style="color:var(--red)">${fM(tot)}</div><div class="d-kpi-s">${fF(tot)}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Avg / Vacant</div><div class="d-kpi-v">${rows.length?fM(tot/rows.length):'-'}</div><div class="d-kpi-s">${vacantCount} Vacant deals</div></div>
+    </div>
+    <div class="d-sec">
+      <span>Expired List</span>
+      <span style="flex:1"></span>
+      <button class="csv-btn" onclick="exportExpiredCSV()">📥 CSV</button>
+    </div>
+    <div id="expTableWrap"></div>`;
+  renderExpiredTable();
+  openOv();
+}
+
+function renderExpiredTable(){
+  const rows=filtPipeline(D.expired||[]);
+  // Sort
+  rows.sort((a,b)=>{
+    let av=a[expSortCol], bv=b[expSortCol];
+    if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}
+    return expSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);
+  });
+  const cols=[
+    {k:'doc',     l:'Doc #'},
+    {k:'type',    l:'Ty'},
+    {k:'group',   l:'Team'},
+    {k:'rep',     l:'Rep'},
+    {k:'company', l:'Company 🏢'},
+    {k:'status',  l:'Status'},
+    {k:'amount',  l:'Amount'},
+    {k:'created', l:'Created'},
+    {k:'exp_close',l:'Exp Close'},
+  ];
+  const sc=k=>expSortCol===k?(expSortDir==='asc'?'asc':'desc'):'';
+  let h=`<table class="dt"><thead><tr>${
+    cols.map(c=>`<th class="${sc(c.k)}" onclick="sortExp('${c.k}')">${c.l}<span class="si"></span></th>`).join('')
+  }</tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const isVacant = r.rep==='Vacant';
+    h+=`<tr class="exp-row">
+      <td class="dt-doc">${r.doc}</td>
+      <td><span class="gb" style="font-size:8px;padding:1px 4px;${r.type==='Quote'?'background:rgba(37,99,235,.1);color:var(--blue)':'background:rgba(217,119,6,.1);color:var(--amber)'}">${r.type[0]}</span></td>
+      <td><span class="gb ${r.group}">${r.group}</span></td>
+      <td style="font-size:10px">
+        ${isVacant
+          ? `<span style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:4px;padding:1px 6px;font-weight:700;font-size:9px;">⚠ Vacant</span>`
+          : (r.rep.length>16?r.rep.slice(0,15)+'…':r.rep)
+        }
+      </td>
+      <td style="font-size:10px;color:var(--text2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500" title="${r.company}">${r.company||'-'}</td>
+      <td style="font-size:9px;color:var(--muted)">${STATUS_SHORT[r.status]||r.status}</td>
+      <td class="dt-amt" style="color:var(--red)">${fF(r.amount)}</td>
+      <td class="dt-dt">${r.created||'-'}</td>
+      <td class="exp-date">${r.exp_close||'-'}</td>
+    </tr>`;
+  });
+  h+='</tbody></table>';
+  const wrap=document.getElementById('expTableWrap');
+  if(wrap) wrap.innerHTML=h;
+}
+
+function sortExp(col){
+  if(expSortCol===col) expSortDir=expSortDir==='asc'?'desc':'asc';
+  else{expSortCol=col; expSortDir=col==='amount'?'desc':'asc';}
+  renderExpiredTable();
+}
+
+function exportExpiredCSV(){
+  const rows=filtPipeline(D.expired||[]);
+  rows.sort((a,b)=>{
+    let av=a[expSortCol],bv=b[expSortCol];
+    if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}
+    return expSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);
+  });
+  let csv='Doc,Type,Team,Rep,Company,Status,Amount,Created,ExpClose\n';
+  rows.forEach(r=>{
+    csv+=[
+      r.doc, r.type, r.group, '"'+r.rep+'"',
+      '"'+(r.company||'').replace(/"/g,"''")+'"',
+      '"'+(STATUS_SHORT[r.status]||r.status)+'"',
+      r.amount.toFixed(2),
+      r.created||'',
+      r.exp_close||''
+    ].join(',')+'\n';
+  });
+  dlCSV(csv,'expired_deals.csv');
+}
+
+// PROB DETAIL
+function openProbDetail(pKey){
+  curProbKey=pKey;probFGrp='All';probFRep='All';probSortCol='amount';probSortDir='desc';
+  const allRows=filtPipeline((D.prob_detail[pKey]||{rows:[]}).rows);
+  const tot=allRows.reduce((a,r)=>a+r.amount,0);const grps=[...new Set(allRows.map(r=>r.group))].sort();const allReps=[...new Set(allRows.map(r=>r.rep))].sort();
+  document.getElementById('dc').innerHTML=`<div class="d-name">Probability <span style="color:${pCol[pKey]||'#fff'}">${pKey}%</span> Pipeline</div><div class="d-sub">${allRows.length} deals · ${fF(tot)}</div><div class="d-kpis"><div class="d-kpi"><div class="d-kpi-l">Quotes</div><div class="d-kpi-v">${allRows.filter(r=>r.type==='Quote').length}</div></div><div class="d-kpi"><div class="d-kpi-l">Opportunities</div><div class="d-kpi-v" style="color:var(--amber)">${allRows.filter(r=>r.type==='Opportunity').length}</div></div><div class="d-kpi"><div class="d-kpi-l">Total</div><div class="d-kpi-v" style="color:${pCol[pKey]}">${fM(tot)}</div></div></div>
+    <div class="d-sec">Filters</div>
+    <div class="pdf-row"><span class="pdf-lbl">Group:</span><button class="pdf-btn on" onclick="setProbF('grp','All',this)">All</button>${grps.map(g=>`<button class="pdf-btn" onclick="setProbF('grp','${g}',this)">${g}</button>`).join('')}</div>
+    <div id="repFRow" class="pdf-row"><span class="pdf-lbl">Rep:</span><button class="pdf-btn on" onclick="setProbF('rep','All',this)">All</button>${allReps.map(r=>`<button class="pdf-btn" onclick="setProbF('rep','${r.replace(/'/g,"\\'")}',this)">${r.length>16?r.slice(0,15)+'…':r}</button>`).join('')}</div>
+    <div class="d-sec"><span>Deals</span><span style="flex:1"></span><button class="csv-btn" onclick="exportProbCSV('${pKey}')">📥 CSV</button></div>
+    <div id="probTableWrap"></div>`;
+  renderProbTable(pKey);openOv();
+}
+function setProbF(type,val,btn){
+  const rowEl=btn.closest('.pdf-row');rowEl.querySelectorAll('.pdf-btn').forEach(b=>b.classList.remove('on'));btn.classList.add('on');
+  if(type==='grp'){probFGrp=val;probFRep='All';const allRows=filtPipeline((D.prob_detail[curProbKey]||{rows:[]}).rows);const f=val==='All'?allRows:allRows.filter(r=>r.group===val);const reps=[...new Set(f.map(r=>r.rep))].sort();document.getElementById('repFRow').innerHTML=`<span class="pdf-lbl">Rep:</span><button class="pdf-btn on" onclick="setProbF('rep','All',this)">All</button>${reps.map(r=>`<button class="pdf-btn" onclick="setProbF('rep','${r.replace(/'/g,"\\'")}',this)">${r.length>16?r.slice(0,15)+'…':r}</button>`).join('')}`;}
+  else probFRep=val;renderProbTable(curProbKey);
+}
+function renderProbTable(pKey){
+  let rows=filtPipeline([...((D.prob_detail[pKey]||{rows:[]}).rows)]);
+  if(probFGrp!=='All')rows=rows.filter(r=>r.group===probFGrp);if(probFRep!=='All')rows=rows.filter(r=>r.rep===probFRep);
+  rows.sort((a,b)=>{let av=a[probSortCol],bv=b[probSortCol];if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}return probSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);});
+  const cols=[{k:'doc',l:'Doc#'},{k:'type',l:'Ty'},{k:'group',l:'Team'},{k:'rep',l:'Rep'},{k:'company',l:'Company'},{k:'amount',l:'Amount'},{k:'created',l:'Created'},{k:'exp_close',l:'Exp Close'}];
+  let h=`<table class="dt"><thead><tr>${cols.map(c=>`<th class="${probSortCol===c.k?(probSortDir==='asc'?'asc':'desc'):''}" onclick="sortProbT('${c.k}')">${c.l}<span class="si"></span></th>`).join('')}</tr></thead><tbody>`;
+  if(!rows.length)h+='<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:16px">No data</td></tr>';
+  else rows.forEach(r=>{const isExp=r.expired;h+=`<tr${isExp?' class="exp-row"':''}><td class="dt-doc">${r.doc}</td><td><span class="gb" style="font-size:8px;padding:1px 4px;${r.type==='Quote'?'background:rgba(37,99,235,.1);color:var(--blue)':'background:rgba(217,119,6,.1);color:var(--amber)'}">${r.type[0]}</span></td><td><span class="gb ${r.group}" style="font-size:8px">${r.group}</span></td><td style="font-size:10px">${r.rep.length>14?r.rep.slice(0,13)+'…':r.rep}</td><td style="font-size:10px;color:var(--text2)">${r.company.length>26?r.company.slice(0,25)+'…':r.company}</td><td class="dt-amt" style="color:${pCol[String(Math.round(r.prob*100))]||'#666'}">${fF(r.amount)}</td><td class="dt-dt">${r.created}</td><td class="${isExp?'exp-date':'dt-dt'}">${r.exp_close?r.exp_close.slice(0,10):'-'}</td></tr>`;});
+  document.getElementById('probTableWrap').innerHTML=h+'</tbody></table>';
+}
+function sortProbT(col){if(probSortCol===col)probSortDir=probSortDir==='asc'?'desc':'asc';else{probSortCol=col;probSortDir='desc';}renderProbTable(curProbKey);}
+function exportProbCSV(pKey){let rows=filtPipeline([...((D.prob_detail[pKey]||{rows:[]}).rows)]);if(probFGrp!=='All')rows=rows.filter(r=>r.group===probFGrp);if(probFRep!=='All')rows=rows.filter(r=>r.rep===probFRep);let csv='Doc,Type,Team,Rep,Company,Prob%,Amount,Created,ExpClose,Status\n';rows.forEach(r=>{csv+=[r.doc,r.type,r.group,'"'+r.rep+'"','"'+r.company+'"',Math.round(r.prob*100)+'%',r.amount,r.created,r.exp_close||'','"'+r.status+'"'].join(',')+'\n';});dlCSV(csv,'prob_'+pKey+'pct.csv');}
+
+function dlCSV(csv,fname){const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=fname;a.click();}
+
+
+// ── DRAG & DROP SECTIONS ──────────────────────────────────────
+(function(){
+  let dragSrc=null;
+  function getWraps(){return [...document.querySelectorAll('#secContainer > .sec-wrap')];}
+
+  function initDnD(){
+    getWraps().forEach(wrap=>{
+      const handle=wrap.querySelector('.drag-handle');
+      if(!handle)return;
+
+      handle.addEventListener('mousedown',e=>{e.stopPropagation();wrap.draggable=true;handle.style.cursor='grabbing';});
+      handle.addEventListener('mouseup',()=>{wrap.draggable=false;handle.style.cursor='grab';});
+
+      wrap.addEventListener('dragstart',e=>{
+        dragSrc=wrap;
+        wrap.classList.add('dragging');
+        e.dataTransfer.effectAllowed='move';
+        e.dataTransfer.setData('text/plain','');
+      });
+      wrap.addEventListener('dragend',()=>{
+        wrap.draggable=false;
+        wrap.classList.remove('dragging');
+        getWraps().forEach(w=>{w.classList.remove('drag-over-top','drag-over-bot');});
+        handle.style.cursor='grab';
+        dragSrc=null;
+      });
+      wrap.addEventListener('dragover',e=>{
+        e.preventDefault();
+        if(!dragSrc||dragSrc===wrap)return;
+        e.dataTransfer.dropEffect='move';
+        getWraps().forEach(w=>w.classList.remove('drag-over-top','drag-over-bot'));
+        const rect=wrap.getBoundingClientRect();
+        const mid=rect.top+rect.height/2;
+        wrap.classList.add(e.clientY<mid?'drag-over-top':'drag-over-bot');
+      });
+      wrap.addEventListener('dragleave',()=>{
+        wrap.classList.remove('drag-over-top','drag-over-bot');
+      });
+      wrap.addEventListener('drop',e=>{
+        e.preventDefault();
+        if(!dragSrc||dragSrc===wrap)return;
+        const container=wrap.parentNode;
+        const wraps=getWraps();
+        const srcIdx=wraps.indexOf(dragSrc);
+        const tgtIdx=wraps.indexOf(wrap);
+        const rect=wrap.getBoundingClientRect();
+        const after=e.clientY>=rect.top+rect.height/2;
+        if(after){
+          container.insertBefore(dragSrc,wrap.nextSibling);
+        } else {
+          container.insertBefore(dragSrc,wrap);
+        }
+        getWraps().forEach(w=>w.classList.remove('drag-over-top','drag-over-bot'));
+      });
+    });
+  }
+  window.addEventListener('load',initDnD);
+})();
+
+
+// ── REP DETAIL MONTH FILTER ───────────────────────────────────
+let _repDetailRep = '';
+let _repDetailMo  = 'all';  // 'all' or '2026-03' etc
+
+function setRepMo(mk, btn) {
+  _repDetailMo = mk;
+  document.querySelectorAll('#repMoFilter .pdf-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  refreshRepMoTable();
+}
+
+function refreshRepMoTable() {
+  const rep = _repDetailRep;
+  const rm  = D.rep_monthly[rep];
+  const tgts= D.rep_targets[rep]||{};
+  if(!rm) return;
+
+  const months = D.all_months.filter(mk=>{
+    if(_repDetailMo!=='all' && mk!==_repDetailMo) return false;
+    return parseInt(mk.split('-')[1])<=9;
+  });
+
+  let moHtml='';
+  let totTgt=0,totBook=0,totSales=0,totPF=0,totAct=0;
+  months.forEach(mk=>{
+    const [y,m]=mk.split('-');
+    const d=rm.monthly[mk]; if(!d) return;
+    const tgt=tgts[parseInt(m)]||0;
+    const bpct=tgt>0?Math.round(d.booking/tgt*100):null;
+    const spct=tgt>0&&d.sales>0?Math.round(d.sales/tgt*100):null;
+    totTgt+=tgt; totBook+=d.booking||0; totSales+=d.sales||0; totPF+=d.pf||0; totAct+=d.activity||0;
+    moHtml+=`<tr>
+      <td style="color:var(--muted);font-weight:600">${MO[parseInt(m)]} ${y}</td>
+      <td class="t-tgt">${fF(tgt)}</td>
+      <td class="t-book">${fF(d.booking)}${bpct!=null?`<span class="pct-sm ${bpct>=100?'over':'under'}">${bpct}%</span>`:''}</td>
+      <td class="t-sales">${d.sales>0?fF(d.sales):'<span style="color:var(--muted2)">-</span>'}${spct!=null?`<span class="pct-sm ${spct>=100?'over':'under'}">${spct}%</span>`:''}</td>
+      <td class="t-pf">${d.pf>0?fF(d.pf):'<span style="color:var(--muted2)">-</span>'}</td>
+      <td class="t-act" style="text-align:right">${d.activity||'-'}</td>
+    </tr>`;
+  });
+
+  // Totals row (only show when showing multiple months)
+  if(_repDetailMo==='all' && months.length>1){
+    moHtml+=`<tr style="background:var(--surface3);font-weight:700;border-top:2px solid var(--border2)">
+      <td style="color:var(--muted);font-weight:800">Total</td>
+      <td class="t-tgt">${fF(totTgt)}</td>
+      <td class="t-book">${fF(totBook)}${totTgt>0?`<span class="pct-sm ${Math.round(totBook/totTgt*100)>=100?'over':'under'}">${Math.round(totBook/totTgt*100)}%</span>`:''}</td>
+      <td class="t-sales">${totSales>0?fF(totSales):'<span style="color:var(--muted2)">-</span>'}${totSales>0&&totTgt>0?`<span class="pct-sm ${Math.round(totSales/totTgt*100)>=100?'over':'under'}">${Math.round(totSales/totTgt*100)}%</span>`:''}</td>
+      <td class="t-pf">${totPF>0?fF(totPF):'<span style="color:var(--muted2)">-</span>'}</td>
+      <td class="t-act" style="text-align:right">${totAct||'-'}</td>
+    </tr>`;
+  }
+
+  const tbody=document.getElementById('repMoTbody');
+  if(tbody) tbody.innerHTML=moHtml;
+}
+
+
+function buildActYearBar(){
+  // Collect all years across all reps
+  const yearSet=new Set();
+  Object.values(D.activity||{}).forEach(rep=>{
+    (rep.years||[]).forEach(y=>yearSet.add(y));
+    // fallback: parse from log dates
+    (rep.log||[]).forEach(e=>{
+      const y=e.year||(e.date?parseInt(e.date):0);
+      if(y>2000) yearSet.add(y);
+    });
+  });
+  const years=[...yearSet].sort();
+  if(years.length===0){document.getElementById('actYrBar').innerHTML='';return;}
+
+  // Default: select current year (D.as_of year)
+  const curYear=parseInt((D.as_of||'2026').slice(0,4));
+  if(actSelYear===null) actSelYear=curYear;
+
+  let h=`<span class="act-yr-lbl">Year</span>
+    <button class="act-yr-btn${actSelYear===0?' on':''}" onclick="setActYear(0,this)">All</button>`;
+  years.forEach(y=>{
+    h+=`<button class="act-yr-btn${actSelYear===y?' on':''}" onclick="setActYear(${y},this)">${y}</button>`;
+  });
+  document.getElementById('actYrBar').innerHTML=h;
+}
+
+function setActYear(yr,btn){
+  actSelYear=yr;
+  document.querySelectorAll('.act-yr-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  renderActivityTable();
+}
+
+
+function openActCell(rep, mo, yr){
+  const act=D.activity&&D.activity[rep];
+  if(!act) return;
+  const logs=act.log||[];
+  const moName=MO[mo]||('M'+mo);
+  const actYrSel=yr===0?null:yr;
+
+  // Filter by month AND year from date field
+  const filtered=logs.filter(e=>{
+    const date=e.date||'';
+    const eYr=parseInt(date.slice(0,4));
+    const eMo=parseInt(date.slice(5,7));
+    return eMo===mo && (actYrSel===null||eYr===actYrSel);
+  }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  const yrLabel=actYrSel===null?'All Years':String(actYrSel);
+  const grp=D.rep_group[rep]||'';
+
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">${rep} <span class="gb ${grp}" style="font-size:11px;padding:3px 9px">${grp}</span></div>
+    <div class="d-sub">Activity · ${moName} ${yrLabel} · ${filtered.length} entries</div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Month</div><div class="d-kpi-v" style="color:var(--purple)">${moName}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Year</div><div class="d-kpi-v">${yrLabel}</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Count</div><div class="d-kpi-v" style="color:var(--purple)">${filtered.length}</div></div>
+    </div>
+    <div class="d-sec">
+      <span>Activity Log</span>
+      <span style="flex:1"></span>
+      <button class="csv-btn" onclick="exportActCellCSV('${rep.replace(/'/g,"\\'")}','${moName}',${mo},${yr})">📥 CSV</button>
+    </div>
+    <table class="dt"><thead>
+      <tr><th>Date</th><th>Company</th><th>Event / Note</th></tr>
+    </thead><tbody>
+      ${filtered.length?
+        filtered.map(e=>`<tr>
+          <td class="dt-dt">${e.date||'-'}</td>
+          <td style="font-size:10px;color:var(--text2);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(e.company||'').replace(/"/g,'&quot;')}">${e.company&&e.company!=='nan'?e.company:'-'}</td>
+          <td style="font-size:10px;color:var(--muted)">${e.event||'-'}</td>
+        </tr>`).join('')
+        :'<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:16px">No entries found</td></tr>'
+      }
+    </tbody></table>`;
+  openOv();
+}
+
+function exportActCellCSV(rep, moName, mo, yr){
+  const act=D.activity&&D.activity[rep];
+  if(!act) return;
+  const logs=act.log||[];
+  const actYrSel=yr===0?null:yr;
+  const filtered=logs.filter(e=>{
+    const eYr=parseInt((e.date||'').slice(0,4));
+    const eMo=parseInt((e.date||'').slice(5,7));
+    return eMo===mo&&(actYrSel===null||eYr===actYrSel);
+  });
+  const rows=filtered.map(e=>`"${e.date||''}","${(e.company||'').replace(/"/g,"''")}","${(e.event||'').replace(/"/g,"''")}"`)
+  dlCSV('Date,Company,Event\n'+rows.join('\n'), `activity_${rep}_${moName}_${yr||'all'}.csv`);
+}
+
+
+// ── REP PIPELINE POPUP ──────────────────────────────────────
+let repPlSortCol='amount', repPlSortDir='desc', repPlTypeFilter='All';
+
+function openRepPipeline(rep){
+  repPlSortCol='amount'; repPlSortDir='desc'; repPlTypeFilter='All';
+  const grp=D.rep_group[rep]||'';
+  const rows=filtPipeline(getRepRows(rep));
+
+  const tot=rows.reduce((a,r)=>a+r.amount,0);
+  const qRows=rows.filter(r=>r.type==='Quote');
+  const oRows=rows.filter(r=>r.type==='Opportunity');
+  const qTot=qRows.reduce((a,r)=>a+r.amount,0);
+  const oTot=oRows.reduce((a,r)=>a+r.amount,0);
+  const wTot=rows.reduce((a,r)=>a+r.amount*r.prob,0);
+
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">${rep} <span class="gb ${grp}" style="font-size:11px;padding:3px 9px">${grp}</span></div>
+    <div class="d-sub">Active Pipeline · ${D.week_tag} · ${rows.length} deals</div>
+    <div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Total</div><div class="d-kpi-v" style="color:var(--blue)">${fM(tot)}</div><div class="d-kpi-s">${rows.length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Quote</div><div class="d-kpi-v" style="color:var(--blue)">${fM(qTot)}</div><div class="d-kpi-s">${qRows.length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Opportunity</div><div class="d-kpi-v" style="color:var(--amber)">${fM(oTot)}</div><div class="d-kpi-s">${oRows.length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Weighted</div><div class="d-kpi-v" style="color:var(--green)">${fM(wTot)}</div><div class="d-kpi-s">by prob%</div></div>
+    </div>
+    <div class="d-sec">
+      <span>
+        <button class="pdf-btn${repPlTypeFilter==='All'?' on':''}" onclick="setRepPlType('All',this)">All</button>
+        <button class="pdf-btn${repPlTypeFilter==='Quote'?' on':''}" onclick="setRepPlType('Quote',this)">Quote</button>
+        <button class="pdf-btn${repPlTypeFilter==='Opportunity'?' on':''}" onclick="setRepPlType('Opportunity',this)">Opportunity</button>
+      </span>
+      <span style="flex:1"></span>
+      <button class="csv-btn" onclick="exportRepPlCSV('${rep.replace(/'/g,"\\'")}')">📥 CSV</button>
+    </div>
+    <div id="repPlTableWrap"></div>`;
+  _repPlRep=rep;
+  renderRepPlTable();
+  openOv();
+}
+
+let _repPlRep='';
+function setRepPlType(t,btn){
+  repPlTypeFilter=t;
+  document.querySelectorAll('#dc .pdf-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  renderRepPlTable();
+}
+
+function renderRepPlTable(){
+  const ps=D.rep_pipeline_summary[_repPlRep];
+  let rows=filtPipeline(getRepRows(rep));
+  if(repPlTypeFilter!=='All') rows=rows.filter(r=>r.type===repPlTypeFilter);
+  rows.sort((a,b)=>{
+    let av=a[repPlSortCol], bv=b[repPlSortCol];
+    if(typeof av==='string'){av=av.toLowerCase();bv=bv.toLowerCase();}
+    return repPlSortDir==='asc'?(av>bv?1:av<bv?-1:0):(av<bv?1:av>bv?-1:0);
+  });
+  const sc=k=>repPlSortCol===k?(repPlSortDir==='asc'?'▲':'▼'):'';
+  const cols=[
+    {k:'doc',l:'Deal'},
+    {k:'type',l:'Type'},
+    {k:'company',l:'Company'},
+    {k:'status',l:'Status'},
+    {k:'prob',l:'Prob%'},
+    {k:'amount',l:'Amount'},
+    {k:'exp_close',l:'Exp Close'},
+    {k:'created',l:'Created'},
+  ];
+  let h=`<table class="pl-popup-tbl"><thead><tr>${
+    cols.map(c=>`<th onclick="sortRepPl('${c.k}')">${c.l} ${sc(c.k)}</th>`).join('')
+  }</tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const probPct=Math.round(r.prob*100);
+    h+=`<tr>
+      <td style="color:var(--text);font-weight:500;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.doc}">${r.doc}</td>
+      <td><span class="${r.type==='Quote'?'pl-type-q':'pl-type-o'}">${r.type[0]}</span></td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)" title="${r.company}">${r.company||'-'}</td>
+      <td style="font-size:9px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(STATUS_SHORT&&STATUS_SHORT[r.status])||r.status}</td>
+      <td><span style="background:${pCol[String(probPct)]||pCol[probPct]||'#888'}22;color:${pCol[String(probPct)]||pCol[probPct]||'#888'};border-radius:4px;padding:1px 6px;font-weight:700;font-size:10px">${probPct}%</span></td>
+      <td style="text-align:right;font-weight:600;color:var(--blue)">${fF(r.amount)}</td>
+      <td style="color:var(--muted);font-size:10px">${r.exp_close||'-'}</td>
+      <td style="color:var(--muted);font-size:10px">${r.created||'-'}</td>
+    </tr>`;
+  });
+  if(!rows.length) h+=`<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px">No deals</td></tr>`;
+  h+='</tbody></table>';
+  const tot=rows.reduce((a,r)=>a+r.amount,0);
+  h+=`<div style="text-align:right;font-size:11px;color:var(--muted);padding:6px 4px">${rows.length} deals · Total: <strong style="color:var(--blue)">${fF(tot)}</strong></div>`;
+  document.getElementById('repPlTableWrap').innerHTML=`<div style="overflow-x:auto">${h}</div>`;
+}
+
+function sortRepPl(col){
+  if(repPlSortCol===col) repPlSortDir=repPlSortDir==='asc'?'desc':'asc';
+  else{repPlSortCol=col;repPlSortDir=col==='amount'?'desc':'asc';}
+  renderRepPlTable();
+}
+
+function exportRepPlCSV(rep){
+  const ps=D.rep_pipeline_summary[rep];
+  let rows=filtPipeline(getRepRows(rep));
+  if(repPlTypeFilter!=='All') rows=rows.filter(r=>r.type===repPlTypeFilter);
+  rows.sort((a,b)=>b.amount-a.amount);
+  const hdr='Deal,Type,Company,Status,Prob%,Amount,Exp Close,Created';
+  const body=rows.map(r=>`"${r.doc}","${r.type}","${r.company||''}","${r.status}",${Math.round(r.prob*100)}%,${r.amount},"${r.exp_close||''}","${r.created||''}"`).join('\n');
+  dlCSV(hdr+'\n'+body, `pipeline_${rep}_${D.week_tag}.csv`);
+}
+
+
+// ── ACTIVITY POPUP MONTH CHIP FILTER ────────────────────────
+let _actMoSelected = new Set(); // empty = all months shown
+let _actPopupRep = '';
+
+function toggleActMoChip(m, el){
+  if(_actMoSelected.has(m)){
+    _actMoSelected.delete(m);
+    el.classList.remove('on');
+  } else {
+    _actMoSelected.add(m);
+    el.classList.add('on');
+  }
+  refreshActLog();
+}
+
+function refreshActLog(){
+  const rep=_actPopupRep;
+  const act=D.activity&&D.activity[rep];
+  if(!act) return;
+  const actYr=actSelYear===0?null:(actSelYear||parseInt((D.as_of||'2026').slice(0,4)));
+  const allLog=act.log||[];
+
+  // Filter by year + selected chips (if any chip on, filter to those months)
+  const filtered=allLog.filter(a=>{
+    const date=a.date||'';
+    const eYr=parseInt(date.slice(0,4));
+    const eMo=parseInt(date.slice(5,7));
+    const yearOk=(actYr===null||eYr===actYr);
+    const moOk=_actMoSelected.size===0?[...selMonths].includes(eMo):_actMoSelected.has(eMo);
+    return yearOk&&moOk;
+  }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+
+  const label=_actMoSelected.size===0?'Activity Log (Selected Months)':
+    'Activity Log — '+[..._actMoSelected].sort((a,b)=>a-b).map(m=>MO[m]).join(', ');
+  const lbl=document.getElementById('actLogLabel');
+  if(lbl) lbl.textContent=label;
+
+  const tbody=filtered.map(a=>`<tr>
+    <td class="dt-dt">${a.date||'-'}</td>
+    <td style="font-size:10px;color:var(--text2);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(a.company||'').replace(/"/g,'&quot;')}">${a.company&&a.company!=='nan'?a.company:'-'}</td>
+    <td style="font-size:10px;color:var(--muted)">${a.event||'-'}</td>
+  </tr>`).join('')||'<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:12px">No entries</td></tr>';
+
+  const wrap=document.getElementById('actLogBody');
+  if(wrap) wrap.innerHTML=`<table class="dt"><thead><tr><th>Date</th><th>Company</th><th>Event / Note</th></tr></thead><tbody>${tbody}</tbody></table>`;
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// KPI POPUP
+// ══════════════════════════════════════════════════════════════
+let _kpiSortCol='rep', _kpiSortDir='asc', _kpiType='', _kpiMo='';
+
+function _kpiClick(i){
+  const actions=['target','booking','sales','pipeline','expired'];
+  const a=actions[i];
+  if(a==='expired') openExpiredDetail();
+  else openKpiDetail(a);
+}
+
+function openKpiDetail(type){
+  _kpiMo=''; _kpiType=type; _kpiSortCol='rep'; _kpiSortDir='asc';
+  const mo=curMonthKey();
+  const moNum=parseInt(mo.split('-')[1]);
+  const reps=filtReps();
+  let title='',color='var(--blue)';
+  if(type==='target')   {title='FY26 Monthly Targets'; color='var(--amber)';}
+  if(type==='booking')  {title='MTD Bookings';          color='var(--cyan)';}
+  if(type==='sales')    {title='Sales Result (Shipped)';color='var(--green)';}
+  if(type==='pipeline') {title='Active Pipeline';       color='var(--blue)';}
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name" style="color:${color}">${title}</div>
+    <div class="d-sub">${D.week_tag} · As of ${D.as_of}</div>
+    <div id="kpiPopupContent"></div>`;
+  renderKpiTable(mo,moNum,reps);
+  openOv();
+}
+
+function curMonthKey(){ return _kpiMo||D.as_of.slice(0,7); }
+
+function renderKpiTable(mo,moNum,reps){
+  const type=_kpiType;
+  const color=type==='target'?'var(--amber)':type==='booking'?'var(--cyan)':type==='sales'?'var(--green)':'var(--blue)';
+
+  if(type==='pipeline'){
+    const rows=filtPipeline(D.pipeline);
+    rows.sort((a,b)=>_kpiSortDir==='asc'?String(a[_kpiSortCol]||'').localeCompare(String(b[_kpiSortCol]||'')):String(b[_kpiSortCol]||'').localeCompare(String(a[_kpiSortCol]||'')));
+    if(_kpiSortCol==='amount') rows.sort((a,b)=>_kpiSortDir==='asc'?a.amount-b.amount:b.amount-a.amount);
+    const total=rows.reduce((a,r)=>a+r.amount,0);
+    const wTotal=rows.reduce((a,r)=>a+r.amount*r.prob,0);
+    const sc=k=>_kpiSortCol===k?(_kpiSortDir==='asc'?'▲':'▼'):'';
+    const sorts=k=>`onclick="kpiSort('${k}')" style="cursor:pointer"`;
+    let html=`<div class="d-kpis">
+      <div class="d-kpi"><div class="d-kpi-l">Total</div><div class="d-kpi-v" style="color:var(--blue)">${fM(total)}</div><div class="d-kpi-s">${rows.length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Weighted</div><div class="d-kpi-v" style="color:var(--green)">${fM(wTotal)}</div><div class="d-kpi-s">by prob%</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Quote</div><div class="d-kpi-v">${fM(rows.filter(r=>r.type==='Quote').reduce((a,r)=>a+r.amount,0))}</div><div class="d-kpi-s">${rows.filter(r=>r.type==='Quote').length} deals</div></div>
+      <div class="d-kpi"><div class="d-kpi-l">Opportunity</div><div class="d-kpi-v" style="color:var(--amber)">${fM(rows.filter(r=>r.type==='Opportunity').reduce((a,r)=>a+r.amount,0))}</div><div class="d-kpi-s">${rows.filter(r=>r.type==='Opportunity').length} deals</div></div>
+    </div>
+    <div class="d-sec"><span>All Deals</span><span style="flex:1"></span><button class="csv-btn" onclick="exportKpiCsv()">📥 CSV</button></div>
+    <div style="overflow-x:auto"><table class="dt"><thead><tr>
+      <th ${sorts('rep')}>Rep ${sc('rep')}</th><th>Grp</th>
+      <th ${sorts('type')}>Type ${sc('type')}</th>
+      <th ${sorts('company')}>Company ${sc('company')}</th>
+      <th ${sorts('status')}>Status ${sc('status')}</th>
+      <th ${sorts('prob')}>Prob ${sc('prob')}</th>
+      <th ${sorts('amount')} style="text-align:right">Amount ${sc('amount')}</th>
+      <th ${sorts('exp_close')}>Exp Close ${sc('exp_close')}</th>
+    </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const pct=Math.round(r.prob*100);
+      html+=`<tr>
+        <td style="font-size:10px;font-weight:600">${r.rep}</td>
+        <td><span class="gb ${r.group}" style="font-size:7px;padding:1px 4px">${r.group[0]}</span></td>
+        <td><span class="${r.type==='Quote'?'pl-type-q':'pl-type-o'}">${r.type[0]}</span></td>
+        <td style="font-size:10px;color:var(--text2);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.company}">${r.company||'-'}</td>
+        <td style="font-size:9px;color:var(--muted);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.status}</td>
+        <td><span style="background:${(pCol&&pCol[pct])||'#888'}22;color:${(pCol&&pCol[pct])||'#888'};border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">${pct}%</span></td>
+        <td style="text-align:right;font-weight:600;color:var(--blue)">${fF(r.amount)}</td>
+        <td style="font-size:10px;color:var(--muted)">${r.exp_close||'-'}</td>
+      </tr>`;
+    });
+    html+=`</tbody></table></div><div style="text-align:right;padding:6px 4px;font-size:11px;color:var(--muted)">${rows.length} deals · <strong style="color:var(--blue)">${fF(total)}</strong></div>`;
+    document.getElementById('kpiPopupContent').innerHTML=html;
+    return;
+  }
+
+  // Target / Booking / Sales
+  const allMkFilt=D.all_months.filter(mk=>parseInt(mk.split('-')[1])<=parseInt(D.as_of.slice(5,7)));
+  const rows=reps.map(rep=>{
+    const rm=D.rep_monthly[rep]; if(!rm) return null;
+    const md=rm.monthly[mo]||{};
+    const tgt=md.target||0,book=md.booking||0,sales=md.sales||0;
+    return {rep,grp:D.rep_group[rep]||'',tgt,book,sales,val:type==='target'?tgt:type==='booking'?book:sales};
+  }).filter(r=>r);
+  rows.sort((a,b)=>{
+    if(_kpiSortCol==='rep') return _kpiSortDir==='asc'?a.rep.localeCompare(b.rep):b.rep.localeCompare(a.rep);
+    if(_kpiSortCol==='grp') return _kpiSortDir==='asc'?a.grp.localeCompare(b.grp):b.grp.localeCompare(a.grp);
+    return _kpiSortDir==='asc'?a[_kpiSortCol]-b[_kpiSortCol]:b[_kpiSortCol]-a[_kpiSortCol];
+  });
+  const totTgt=rows.reduce((a,r)=>a+r.tgt,0);
+  const totBook=rows.reduce((a,r)=>a+r.book,0);
+  const totSales=rows.reduce((a,r)=>a+r.sales,0);
+  const sc=k=>_kpiSortCol===k?(_kpiSortDir==='asc'?'▲':'▼'):'';
+  const sorts=k=>`onclick="kpiSort('${k}')" style="cursor:pointer"`;
+  const moLabel=m=>{const[y,mm]=m.split('-');return (MO||['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])[parseInt(mm)]+' '+y;};
+  const months=D.all_months.filter(mk=>parseInt(mk.split('-')[1])<=parseInt(D.as_of.slice(5,7)));
+
+  let html=`<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
+    <span style="font-size:9px;font-weight:700;color:var(--muted);letter-spacing:1px">MONTH</span>
+    ${months.map(mk=>`<button class="pdf-btn${mk===mo?' on':''}" onclick="switchKpiMo('${mk}',this)">${moLabel(mk)}</button>`).join('')}
+  </div>
+  <div class="d-kpis">
+    <div class="d-kpi"><div class="d-kpi-l">Target</div><div class="d-kpi-v" style="color:var(--amber)">${fM(totTgt)}</div><div class="d-kpi-s">${fF(totTgt)}</div></div>
+    <div class="d-kpi"><div class="d-kpi-l">MTD Booking</div><div class="d-kpi-v" style="color:var(--cyan)">${fM(totBook)}</div><div class="d-kpi-s">${totTgt>0?Math.round(totBook/totTgt*100)+'% attain':fF(totBook)}</div></div>
+    <div class="d-kpi"><div class="d-kpi-l">Sales Result</div><div class="d-kpi-v" style="color:var(--green)">${fM(totSales)}</div><div class="d-kpi-s">${totTgt>0?Math.round(totSales/totTgt*100)+'% attain':fF(totSales)}</div></div>
+  </div>
+  <div class="d-sec"><span>Rep Breakdown — ${moLabel(mo)}</span><span style="flex:1"></span><button class="csv-btn" onclick="exportKpiCsv()">📥 CSV</button></div>
+  <div style="overflow-x:auto"><table class="dt"><thead><tr>
+    <th ${sorts('rep')}>Rep ${sc('rep')}</th><th ${sorts('grp')}>Group ${sc('grp')}</th>
+    <th ${sorts('tgt')} style="text-align:right">Target ${sc('tgt')}</th>
+    <th ${sorts('book')} style="text-align:right">MTD Booking ${sc('book')}</th>
+    <th style="text-align:right">Book%</th>
+    <th ${sorts('sales')} style="text-align:right">Sales Result ${sc('sales')}</th>
+    <th style="text-align:right">Sales%</th>
+  </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const bpct=r.tgt>0?Math.round(r.book/r.tgt*100):null;
+    const spct=r.tgt>0?Math.round(r.sales/r.tgt*100):null;
+    html+=`<tr>
+      <td style="font-weight:600;color:${color}">${r.rep}</td>
+      <td><span class="gb ${r.grp}" style="font-size:8px;padding:1px 5px">${r.grp}</span></td>
+      <td class="t-tgt">${fF(r.tgt)}</td>
+      <td class="t-book">${r.book>0?fF(r.book):'<span style="color:var(--muted2)">-</span>'}</td>
+      <td style="text-align:right">${bpct!=null&&r.book>0?`<span class="pct-sm ${bpct>=100?'over':'under'}">${bpct}%</span>`:'<span style="color:var(--muted2)">-</span>'}</td>
+      <td class="t-sales">${r.sales>0?fF(r.sales):'<span style="color:var(--muted2)">-</span>'}</td>
+      <td style="text-align:right">${spct!=null&&r.sales>0?`<span class="pct-sm ${spct>=100?'over':'under'}">${spct}%</span>`:'<span style="color:var(--muted2)">-</span>'}</td>
+    </tr>`;
+  });
+
+  // Unassigned row
+  const unMo=D.unassigned_monthly&&D.unassigned_monthly[mo];
+  const unBook=unMo?unMo.booking:0, unSales=unMo?unMo.sales:0;
+  if(unBook>0||unSales>0){
+    html+=`<tr style="background:rgba(107,114,128,.06)">
+      <td colspan="2">
+        <span style="font-size:10px;font-style:italic;color:var(--muted)">Unassigned</span>
+        <span style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;font-size:8px;color:var(--muted2);margin-left:4px">former / unlinked reps</span>
+        <button onclick="toggleUnassignDetail(this,'${mo}')" style="margin-left:6px;font-size:9px;color:var(--blue);background:none;border:none;cursor:pointer;padding:0">▶ details</button>
+      </td>
+      <td class="t-tgt" style="color:var(--muted2)">—</td>
+      <td class="t-book" style="color:var(--muted)">${unBook>0?fF(unBook):'—'}</td><td></td>
+      <td class="t-sales" style="color:var(--muted)">${unSales>0?fF(unSales):'—'}</td><td></td>
+    </tr>
+    <tr id="unassign-detail-${mo.replace(/-/g,'')}" style="display:none;background:rgba(107,114,128,.04)">
+      <td colspan="7" style="padding:6px 16px">
+        <table style="width:100%;font-size:10px;border-collapse:collapse">
+          <thead><tr>
+            <th style="text-align:left;color:var(--muted);font-weight:600;padding:3px 6px;font-size:9px">REP</th>
+            <th style="text-align:right;color:var(--muted);font-weight:600;padding:3px 6px;font-size:9px">BOOKING</th>
+            <th style="text-align:right;color:var(--muted);font-weight:600;padding:3px 6px;font-size:9px">SALES</th>
+          </tr></thead><tbody>
+          ${Object.entries((unMo&&unMo.detail)||{}).sort((a,b)=>(b[1].sales||0)-(a[1].sales||0)).map(([rep,v])=>
+            `<tr><td style="padding:2px 6px;color:var(--text2)">${rep||'(unlinked SO)'}</td>
+             <td style="text-align:right;padding:2px 6px;color:var(--muted)">${v.booking>0?fF(v.booking):'—'}</td>
+             <td style="text-align:right;padding:2px 6px;color:var(--muted)">${v.sales>0?fF(v.sales):'—'}</td></tr>`
+          ).join('')}
+          </tbody>
+        </table>
+      </td>
+    </tr>`;
+  }
+
+  // Grand total
+  const cm2=D.company_monthly&&D.company_monthly[mo];
+  const grandBook=cm2?cm2.booking:totBook+unBook;
+  const grandSales=cm2?cm2.sales:totSales+unSales;
+  const bpctT=totTgt>0?Math.round(grandBook/totTgt*100):null;
+  const spctT=totTgt>0?Math.round(grandSales/totTgt*100):null;
+  html+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+    <td colspan="2" style="font-weight:700;color:var(--muted)">TOTAL (Company)</td>
+    <td class="t-tgt">${fF(totTgt)}</td>
+    <td class="t-book">${fF(grandBook)}</td>
+    <td style="text-align:right">${bpctT!=null?`<span class="pct-sm ${bpctT>=100?'over':'under'}">${bpctT}%</span>`:''}</td>
+    <td class="t-sales">${fF(grandSales)}</td>
+    <td style="text-align:right">${spctT!=null?`<span class="pct-sm ${spctT>=100?'over':'under'}">${spctT}%</span>`:''}</td>
+  </tr>`;
+  html+=`</tbody></table></div>`;
+  document.getElementById('kpiPopupContent').innerHTML=html;
+}
+
+function switchKpiMo(mk,btn){
+  _kpiMo=mk;
+  document.querySelectorAll('#dc .pdf-btn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  renderKpiTable(mk,parseInt(mk.split('-')[1]),filtReps());
+}
+function kpiSort(col){
+  if(_kpiSortCol===col) _kpiSortDir=_kpiSortDir==='asc'?'desc':'asc';
+  else{_kpiSortCol=col;_kpiSortDir=(col==='rep'||col==='grp')?'asc':'desc';}
+  renderKpiTable(curMonthKey(),parseInt(curMonthKey().split('-')[1]),filtReps());
+}
+function exportKpiCsv(){
+  const type=_kpiType,mo=curMonthKey(),reps=filtReps();
+  let csv='',fn='';
+  if(type==='pipeline'){
+    csv='Rep,Group,Type,Company,Status,Prob%,Amount,Exp Close\n';
+    filtPipeline(D.pipeline).forEach(r=>{csv+=`"${r.rep}","${r.group}","${r.type}","${r.company}","${r.status}",${Math.round(r.prob*100)}%,${r.amount},"${r.exp_close}"\n`;});
+    fn=`pipeline_${D.week_tag}.csv`;
+  } else {
+    csv='Rep,Group,Target,MTD Booking,Book%,Sales Result,Sales%\n';
+    reps.forEach(rep=>{
+      const rm=D.rep_monthly[rep];if(!rm)return;
+      const md=rm.monthly[mo]||{};
+      const tgt=md.target||0,book=md.booking||0,sales=md.sales||0;
+      csv+=`"${rep}","${D.rep_group[rep]||''}",${tgt},${book},"${tgt>0?Math.round(book/tgt*100)+'%':''}",${sales},"${tgt>0?Math.round(sales/tgt*100)+'%':''}"\n`;
+    });
+    fn=`kpi_${type}_${mo}.csv`;
+  }
+  dlCSV(csv,fn);
+}
+function toggleUnassignDetail(btn,mo){
+  const id='unassign-detail-'+mo.replace(/-/g,'');
+  const row=document.getElementById(id);
+  if(!row)return;
+  const hidden=row.style.display==='none';
+  row.style.display=hidden?'':'none';
+  btn.textContent=hidden?'▼ details':'▶ details';
+}
+
+
+// ══════════════════════════════════════════════════════════════
+// 1) RAW DATA POPUP
+// ══════════════════════════════════════════════════════════════
+
+
+// ── QU lookup helper ────────────────────────────────────────────
+function getQU(rep, company, amount){
+  const ql=D.qu_lookup||{};
+  const key=rep+'|||'+company;
+  const list=ql[key];
+  if(!list||!list.length) return '';
+  // Pick QU with closest amount
+  let best=list[0], bestDiff=Math.abs((list[0].amount||0)-amount);
+  list.forEach(q=>{ const d=Math.abs((q.amount||0)-amount); if(d<bestDiff){bestDiff=d;best=q;} });
+  return best.qu||'';
+}
+
+// ── Line item detail popup ────────────────────────────────────
+function renderLineItems(lines){
+  if(!lines||!lines.length) return '<div style="color:var(--muted);font-size:10px;padding:6px 0">No item detail available</div>';
+  let t=`<table style="width:100%;font-size:10px;border-collapse:collapse;margin-top:4px">
+    <thead><tr style="background:var(--surface3)">
+      <th style="text-align:left;padding:4px 6px;font-size:9px;color:var(--muted);font-weight:700;letter-spacing:.6px">ITEM</th>
+      <th style="text-align:right;padding:4px 6px;font-size:9px;color:var(--muted);font-weight:700">QTY</th>
+      <th style="text-align:right;padding:4px 6px;font-size:9px;color:var(--muted);font-weight:700">UNIT PRICE</th>
+      <th style="text-align:right;padding:4px 6px;font-size:9px;color:var(--muted);font-weight:700">AMOUNT</th>
+    </tr></thead><tbody>`;
+  lines.forEach(l=>{
+    const qty=l.qty||0;
+    const amt=l.amount||0;
+    // compute price: use stored price if >0, else derive from amount/qty
+    const price = (l.price && l.price>0) ? l.price : (qty>0 ? amt/qty : 0);
+    t+=`<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:4px 6px;font-family:monospace;color:var(--text2)">${l.item}</td>
+      <td style="padding:4px 6px;text-align:right">${qty}</td>
+      <td style="padding:4px 6px;text-align:right;color:var(--muted)">${price>0?fF(price):'-'}</td>
+      <td style="padding:4px 6px;text-align:right;font-weight:600;color:var(--blue)">${fF(amt)}</td>
+    </tr>`;
+  });
+  const tot=lines.reduce((a,l)=>a+(l.amount||0),0);
+  t+=`<tr style="background:var(--surface2);font-weight:700">
+    <td colspan="3" style="padding:4px 6px;font-size:9px;color:var(--muted)">SUBTOTAL (${lines.length} items)</td>
+    <td style="padding:4px 6px;text-align:right;color:var(--blue)">${fF(tot)}</td>
+  </tr></tbody></table>`;
+  return t;
+}
+
+// ── Closed badge ─────────────────────────────────────────────
+function closedBadge(row){
+  if(row.closed_won) return '<span style="background:rgba(5,150,105,.15);color:var(--green);font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:4px">WON</span>';
+  if(row.closed_lost) return '<span style="background:rgba(220,38,38,.12);color:var(--red);font-size:8px;font-weight:700;padding:1px 5px;border-radius:3px;margin-left:4px">LOST</span>';
+  return '';
+}
+
+
+function openRawData(type, rep, moListStr){
+  const moList = moListStr ? moListStr.split(',').map(Number) : [...selMonths];
+  const moNames = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const moLabel = moList.length===1?(moNames[moList[0]]||''):moList.map(m=>moNames[m]).join(', ');
+  let title='', rows=[], total=0;
+
+  if(type==='booking'){
+    title=`📋 MTD Booking — ${rep}`;
+    const raw=(D.booking_raw||{})[rep]||[];
+    rows=raw.filter(r=>moList.includes(r.mo)).sort((a,b)=>b.date.localeCompare(a.date));
+    total=rows.reduce((a,r)=>a+r.amount,0);
+
+    let tbl=`<table class="dt"><thead><tr>
+      <th>SO#</th><th>Customer</th><th style="text-align:right">Amount</th><th>Date</th><th></th>
+    </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const lineId='bl-'+r.so.replace(/[^a-z0-9]/gi,'_');
+      tbl+=`<tr>
+        <td style="font-family:monospace;font-size:10px;font-weight:600">
+          ${r.so}${getQU(rep,r.company||'',r.amount)?`<br><span style="color:var(--muted);font-size:9px">${getQU(rep,r.company||'',r.amount)}</span>`:''}
+        </td>
+        <td style="font-size:10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.company||'-'}</td>
+        <td style="text-align:right;font-weight:700;color:var(--cyan);cursor:pointer" onclick="toggleSub('${lineId}')"
+            title="Click to see line items">${fF(r.amount)} <span style="font-size:8px;color:var(--muted)">▾</span></td>
+        <td style="font-size:10px;color:var(--muted)">${r.date}</td>
+        <td></td>
+      </tr>
+      <tr id="${lineId}" style="display:none;background:var(--surface2)">
+        <td colspan="5" style="padding:0 8px 8px 28px">${renderLineItems(r.lines||[])}</td>
+      </tr>`;
+    });
+    tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+      <td colspan="2" style="color:var(--muted)">TOTAL (${rows.length} orders)</td>
+      <td style="text-align:right;color:var(--cyan)">${fF(total)}</td><td colspan="2"></td>
+    </tr></tbody></table>`;
+    _showPanel(title, moLabel, rows.length, total, tbl, type, rep, moListStr);
+
+  } else if(type==='sales'){
+    title=`📦 Sales Result — ${rep}`;
+    // sales_raw entries are already SO-level with pre-built lines[]
+    const raw=(D.sales_raw||{})[rep]||[];
+    const soList=raw.filter(r=>moList.includes(r.mo)).sort((a,b)=>b.date.localeCompare(a.date));
+    total=soList.reduce((a,r)=>a+r.amount,0);
+
+    let tbl=`<table class="dt"><thead><tr>
+      <th>SO# / QU#</th><th>Customer</th><th style="text-align:right">Amount</th><th>Date</th><th></th>
+    </tr></thead><tbody>`;
+    soList.forEach(r=>{
+      const lineId='sl-'+r.so.replace(/[^a-z0-9]/gi,'_');
+      const qu=getQU(rep, r.customer||'', r.amount);
+      const hasLines=(r.lines&&r.lines.length)>0;
+      tbl+=`<tr>
+        <td style="font-family:monospace;font-size:10px;font-weight:600">
+          ${r.so}${qu?`<br><span style="color:var(--muted);font-size:9px">${qu}</span>`:''}
+        </td>
+        <td style="font-size:10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.customer||'-'}</td>
+        <td style="text-align:right;font-weight:700;color:var(--green);cursor:${hasLines?'pointer':'default'}"
+            ${hasLines?`onclick="toggleSub('${lineId}')" title="Click for item detail"`:''}>${fF(r.amount)}${hasLines?' <span style="font-size:8px;color:var(--muted)">▾</span>':''}</td>
+        <td style="font-size:10px;color:var(--muted)">${r.date}</td>
+        <td></td>
+      </tr>
+      <tr id="${lineId}" style="display:none;background:var(--surface2)">
+        <td colspan="5" style="padding:0 8px 8px 28px">${renderLineItems(r.lines||[])}</td>
+      </tr>`;
+    });
+    tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+      <td colspan="2" style="color:var(--muted)">TOTAL (${soList.length} orders)</td>
+      <td style="text-align:right;color:var(--green)">${fF(total)}</td><td colspan="2"></td>
+    </tr></tbody></table>`;
+    _showPanel(title, moLabel, soList.length, total, tbl, type, rep, moListStr);
+
+  } else if(type==='pf'||type==='pf_rep'){
+    title=`⏳ Pending Fulfillment — ${rep}`;
+    rows=(D.pf_raw||[]).filter(r=>r.rep===rep).sort((a,b)=>(a.ship_date||'').localeCompare(b.ship_date||''));
+    total=rows.reduce((a,r)=>a+r.amount,0);
+
+    let tbl=`<table class="dt"><thead><tr>
+      <th>SO#</th><th>Customer</th><th style="text-align:right">Amount</th><th>Ship Date</th><th>Status</th>
+    </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      tbl+=`<tr>
+        <td style="font-family:monospace;font-size:10px">${r.so}</td>
+        <td style="font-size:10px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.company||'-'}</td>
+        <td style="text-align:right;font-weight:600;color:var(--blue)">${fF(r.amount)}</td>
+        <td style="font-size:10px;color:var(--muted)">${r.ship_date||'-'}</td>
+        <td style="font-size:9px;color:var(--muted)">${r.status||'-'}</td>
+      </tr>`;
+    });
+    tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+      <td colspan="2" style="color:var(--muted)">TOTAL (${rows.length})</td>
+      <td style="text-align:right;color:var(--blue)">${fF(total)}</td><td colspan="2"></td>
+    </tr></tbody></table>`;
+    _showPanel(title, moLabel, rows.length, total, tbl, type, rep, moListStr);
+
+  } else if(type==='target'){
+    title=`🎯 Target — ${rep}`;
+    const rm=D.rep_monthly[rep]; if(!rm){alert('No data');return;}
+    const moNames2=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    rows=moList.map(m=>{
+      const mk=`2026-${String(m).padStart(2,'0')}`;
+      const d=rm.monthly[mk]||{};
+      return{month:moNames2[m]+' 2026',target:d.target||0};
+    });
+    total=rows.reduce((a,r)=>a+(r.target||0),0);
+    let tbl=`<table class="dt"><thead><tr><th>Month</th><th style="text-align:right">Target</th></tr></thead><tbody>`;
+    rows.forEach(r=>{tbl+=`<tr><td>${r.month}</td><td style="text-align:right;font-weight:600">${fF(r.target)}</td></tr>`;});
+    tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)"><td>TOTAL</td><td style="text-align:right">${fF(total)}</td></tr></tbody></table>`;
+    _showPanel(title, moLabel, rows.length, total, tbl, type, rep, moListStr);
+
+  } else if(type==='highprob'||type==='pipeline'){
+    const isHP = type==='highprob';
+    title = isHP ? `⭐ High Prob (≥75%) — ${rep}` : `🔭 Active Pipeline — ${rep}`;
+    rows = isHP ? getRepRows(rep).filter(r=>r.prob>=0.75)
+                : filtPipeline(getRepRows(rep)).sort((a,b)=>b.amount-a.amount);
+    total = rows.reduce((a,r)=>a+r.amount,0);
+
+    let tbl=`<table class="dt"><thead><tr>
+      <th>Deal</th><th>Type</th><th>Company</th><th>Status</th><th>Prob%</th>
+      <th style="text-align:right">Amount</th><th>Exp Close</th><th></th>
+    </tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const pct=Math.round(r.prob*100);
+      const pColor=pct>=70?'var(--green)':pct>=50?'var(--amber)':'var(--muted)';
+      const lineId='pl-'+r.doc.replace(/[^a-z0-9]/gi,'_');
+      const badge=closedBadge(r);
+      const hasLines=(r.lines&&r.lines.length)>0;
+      tbl+=`<tr ${r.closed_won?'style="background:rgba(5,150,105,.04)"':r.closed_lost?'style="background:rgba(220,38,38,.03)"':''}>
+        <td style="font-size:10px;font-weight:600;color:var(--blue)">${r.doc}${badge}</td>
+        <td><span class="${r.type==='Quote'?'pl-type-q':'pl-type-o'}">${r.type[0]}</span></td>
+        <td style="font-size:10px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.company}</td>
+        <td style="font-size:9px;color:var(--muted)">${r.status}</td>
+        <td><span style="background:rgba(0,0,0,.06);color:${pColor};border-radius:4px;padding:1px 5px;font-weight:700;font-size:10px">${pct}%</span></td>
+        <td style="text-align:right;font-weight:700;color:var(--blue);cursor:${hasLines?'pointer':'default'}"
+            ${hasLines?`onclick="toggleSub('${lineId}')" title="Click for item detail"`:''}>${fF(r.amount)}${hasLines?' <span style="font-size:8px;color:var(--muted)">▾</span>':''}</td>
+        <td style="font-size:10px;color:var(--muted)">${r.exp_close||'-'}</td>
+        <td></td>
+      </tr>
+      <tr id="${lineId}" style="display:none;background:var(--surface2)">
+        <td colspan="8" style="padding:0 8px 8px 28px">${renderLineItems(r.lines||[])}</td>
+      </tr>`;
+    });
+    const wonCnt=rows.filter(r=>r.closed_won).length;
+    tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+      <td colspan="4" style="color:var(--muted)">TOTAL (${rows.length} deals${wonCnt?` · <span style="color:var(--green)">${wonCnt} WON</span>`:''})
+      </td>
+      <td></td><td style="text-align:right;color:var(--blue)">${fF(total)}</td><td colspan="2"></td>
+    </tr></tbody></table>`;
+    _showPanel(title, '', rows.length, total, tbl, type, rep, moListStr);
+  }
+}
+
+function toggleSub(id){
+  const el=document.getElementById(id);
+  if(el) el.style.display=el.style.display==='none'?'':'none';
+}
+
+function _showPanel(title, moLabel, cnt, total, tbl, type, rep, moListStr){
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">${title}</div>
+    <div class="d-sub">${D.week_tag}${moLabel?' · '+moLabel:''} · ${cnt} records · Total: <strong>${fF(total)}</strong></div>
+    <button class="csv-btn" onclick="exportRawCsv('${type}','${(rep||'').replace(/'/g,"\\'")}','${moListStr||''}')" style="margin:8px 0">📥 Export CSV</button>
+    <div style="overflow-x:auto;max-height:450px;overflow-y:auto;margin-top:4px">${tbl}</div>`;
+  openOv();
+}
+
+
+function exportRawCsv(type,rep,moListStr){
+  const moList=moListStr?moListStr.split(',').map(Number):[...selMonths];
+  let csv='',fn='';
+  if(type==='booking'){
+    csv='SO#,Customer,Amount,Date\n';
+    ((D.booking_raw||{})[rep]||[]).filter(r=>moList.includes(r.mo)).forEach(r=>{csv+=`"${r.so}","${r.customer}",${r.amount},"${r.date}"\n`;});
+    fn=`booking_${rep}_${D.week_tag}.csv`;
+  } else if(type==='sales'){
+    csv='SO#,Customer,Amount,Date\n';
+    ((D.sales_raw||{})[rep]||[]).filter(r=>moList.includes(r.mo)).forEach(r=>{csv+=`"${r.so}","${r.customer}",${r.amount},"${r.date}"\n`;});
+    fn=`sales_${rep}_${D.week_tag}.csv`;
+  } else if(type==='pf'){
+    csv='SO#,Customer,Amount\n';
+    ((D.pf_raw||{})[rep]||[]).forEach(r=>{csv+=`"${r.so}","${r.customer}",${r.amount}\n`;});
+    fn=`pf_${rep}_${D.week_tag}.csv`;
+  } else if(type==='highprob'){
+    csv='Deal,Type,Company,Status,Prob%,Amount,Exp Close\n';
+    const ps=D.rep_pipeline_summary[rep];
+    getRepRows(rep).filter(r=>r.prob>=0.75).forEach(r=>{csv+=`"${r.doc}","${r.type}","${r.company}","${r.status}",${Math.round(r.prob*100)}%,${r.amount},"${r.exp_close}"\n`;});
+    fn=`highprob_${rep}_${D.week_tag}.csv`;
+  }
+  if(csv) dlCSV(csv,fn);
+}
+
+// ══════════════════════════════════════════════════════════════
+// 3) DRAG & DROP COLUMN REORDER
+// ══════════════════════════════════════════════════════════════
+let _dndDragIdx = null;
+
+function initPerfDnD(){
+  const thead = document.querySelector('#perfTable thead');
+  if(!thead) return;
+  const ths = thead.querySelectorAll('th');
+  ths.forEach((th, i) => {
+    th.draggable = true;
+    th.addEventListener('dragstart', e => {
+      _dndDragIdx = i;
+      th.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    th.addEventListener('dragend', () => {
+      th.classList.remove('dragging');
+      thead.querySelectorAll('th').forEach(t=>t.classList.remove('drag-over'));
+    });
+    th.addEventListener('dragover', e => {
+      e.preventDefault();
+      thead.querySelectorAll('th').forEach(t=>t.classList.remove('drag-over'));
+      th.classList.add('drag-over');
+    });
+    th.addEventListener('drop', e => {
+      e.preventDefault();
+      const dropIdx = i;
+      if(_dndDragIdx===null || _dndDragIdx===dropIdx) return;
+      // Reorder cols array
+      const moved = _perfCols.splice(_dndDragIdx, 1)[0];
+      _perfCols.splice(dropIdx, 0, moved);
+      renderPerfTable();
+      initPerfDnD();
+    });
+  });
+}
+
+// Store cols order globally so DnD can mutate it
+let _perfCols = null;
+
+// ══════════════════════════════════════════════════════════════
+// ★  ANALYTICS SECTION — YoY Charts + Rep Conditional Table
+// ══════════════════════════════════════════════════════════════
+let _anlView = 'amount';  // 'amount' | 'count'
+let _anlMonths = new Set();
+let _anlCharts = {};
+
+function initAnalyticsSection(){
+  const allMonths = [1,2,3,4,5,6,7,8,9,10,11,12];
+  const curYr = parseInt((D.as_of||'2026').slice(0,4));
+  const curMo = parseInt((D.as_of||'2026-03').slice(5,7));
+  const avail = allMonths; // 1~12월 전체 표시
+  if(!_anlMonths.size) avail.forEach(m => _anlMonths.add(m));
+
+  // Build month chips
+  const chipWrap = document.getElementById('analytics-mo-chips');
+  if(chipWrap){
+    chipWrap.innerHTML = avail.map(m =>
+      `<button class="anl-mo-chip${_anlMonths.has(m)?' on':''}" onclick="toggleAnlMonth(${m},this)">${MO[m]}</button>`
+    ).join('');
+  }
+
+  // Build target inputs
+  const tgtWrap = document.getElementById('analytics-tgt-inputs');
+  if(tgtWrap){
+    const stored = _anlTargets || {};
+    tgtWrap.innerHTML = avail.map(m =>
+      `<div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+        <div style="font-size:9px;color:var(--muted);font-family:monospace">${MO[m]}</div>
+        <input id="anl-tgt-${m}" type="number" value="${stored[m]||500000}" min="0" step="50000"
+          style="width:72px;padding:3px 5px;border-radius:4px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:10px;text-align:right;font-family:monospace">
+      </div>`
+    ).join('');
+  }
+
+  // Update badge
+  const b = document.getElementById('badge-analytics');
+  if(b) b.textContent = `${avail.length} months · 2026 vs 2025`;
+
+  drawAnalyticsCharts(avail, curYr);
+  renderAnalyticsTable();
+}
+
+function toggleAnlMonth(m, btn){
+  if(_anlMonths.has(m)) _anlMonths.delete(m);
+  else _anlMonths.add(m);
+  btn.classList.toggle('on', _anlMonths.has(m));
+  renderAnalyticsTable();
+}
+
+function setAnalyticsView(v){
+  _anlView = v;
+  document.getElementById('aview-amount').style.background = v==='amount'?'var(--blue)':'transparent';
+  document.getElementById('aview-amount').style.color = v==='amount'?'#fff':'var(--muted)';
+  document.getElementById('aview-count').style.background = v==='count'?'var(--blue)':'transparent';
+  document.getElementById('aview-count').style.color = v==='count'?'#fff':'var(--muted)';
+  renderAnalyticsTable();
+}
+
+// ── Build YoY data from pipeline_created_weeks ──
+function getYoYMonthly(){
+  const weeks = D.pipeline_created_weeks || {};
+  const data = {2025:{}, 2026:{}};
+  Object.values(weeks).forEach(wdata => {
+    (wdata.deals||[]).forEach(d => {
+      const cr = d.created || ''; if(cr.length < 7) return;
+      const yr = parseInt(cr.slice(0,4));
+      const mo = parseInt(cr.slice(5,7));
+      if(yr !== 2025 && yr !== 2026) return;
+      if(!data[yr][mo]) data[yr][mo] = {count:0, amount:0};
+      data[yr][mo].count++;
+      data[yr][mo].amount += d.amount || 0;
+    });
+  });
+  return data;
+}
+
+// ── Draw 4 charts using native Canvas ──
+function drawAnalyticsCharts(avail, curYr){
+  const yoy = getYoYMonthly();
+  const mo26 = avail.map(m => yoy[2026]?.[m] || {count:0, amount:0});
+  const mo25 = avail.map(m => yoy[2025]?.[m] || {count:0, amount:0});
+  const labels = avail.map(m => MO[m]);
+
+  // Activity by team per month
+  const actMoByTeam = {East:{}, West:{}, National:{}};
+  const actYr = curYr;
+  Object.keys(D.activity||{}).forEach(rep => {
+    const grp = D.rep_group[rep]||'';
+    if(!actMoByTeam[grp]) return;
+    const act = D.activity[rep];
+    if(!act||!act.monthly) return;
+    avail.forEach(m => {
+      const mk = `${actYr}-${String(m).padStart(2,'0')}`;
+      actMoByTeam[grp][m] = (actMoByTeam[grp][m]||0) + (act.monthly[mk]||0);
+    });
+  });
+
+  // Get CSS var color (fallback if getComputedStyle not available)
+  const getC = v => {
+    try { return getComputedStyle(document.documentElement).getPropertyValue(v).trim() || '#888'; }
+    catch(e){ return '#888'; }
+  };
+
+  const cfg = [
+    { id:'chartCount',  label26: mo26.map(d=>d.count),  label25: mo25.map(d=>d.count),
+      color26:'#2563eb', color25:'#b8c8da', yFmt: v=>v, title:'count' },
+    { id:'chartAmount', label26: mo26.map(d=>d.amount), label25: mo25.map(d=>d.amount),
+      color26:'#059669', color25:'#b8c8da', yFmt: v=>v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(0)+'K':v, title:'$' },
+    { id:'chartAvg',
+      label26: mo26.map(d=>d.count>0?Math.round(d.amount/d.count):0),
+      label25: mo25.map(d=>d.count>0?Math.round(d.amount/d.count):0),
+      color26:'#d97706', color25:'#b8c8da', yFmt: v=>v>=1e3?(v/1e3).toFixed(0)+'K':v, title:'avg$' },
+  ];
+
+  cfg.forEach(c => {
+    const canvas = document.getElementById(c.id);
+    if(!canvas) return;
+    if(_anlCharts[c.id]) { _anlCharts[c.id].destroy && _anlCharts[c.id].destroy(); }
+    const ctx = canvas.getContext('2d');
+    canvas.width = canvas.parentElement.clientWidth - 28;
+    canvas.height = 110;
+    _drawBarChart(ctx, canvas.width, canvas.height, labels, c.label26, c.label25, c.color26, c.color25, c.yFmt);
+  });
+
+  // Activity stacked bar
+  const canvasAct = document.getElementById('chartActivity');
+  if(canvasAct){
+    canvasAct.width = canvasAct.parentElement.clientWidth - 28;
+    canvasAct.height = 110;
+    const ctx = canvasAct.getContext('2d');
+    const dE = avail.map(m => actMoByTeam.East[m]||0);
+    const dW = avail.map(m => actMoByTeam.West[m]||0);
+    const dN = avail.map(m => actMoByTeam.National[m]||0);
+    _drawStackedBar(ctx, canvasAct.width, canvasAct.height, labels, [
+      {data:dE, color:'#7c3aed'},
+      {data:dW, color:'#2563eb'},
+      {data:dN, color:'#d97706'},
+    ]);
+  }
+}
+
+function _drawBarChart(ctx, W, H, labels, d26, d25, c26, c25, yFmt){
+  ctx.clearRect(0,0,W,H);
+  const pad = {t:10, b:26, l:38, r:8};
+  const n = labels.length;
+  if(!n) return;
+  const maxV = Math.max(1, ...d26, ...d25);
+  const cH = H - pad.t - pad.b;
+  const cW = W - pad.l - pad.r;
+  const grpW = cW / n;
+  const bW = Math.min(grpW * 0.35, 20);
+  const isDark = document.documentElement.dataset.theme === 'dark' || document.documentElement.dataset.theme === 'slate';
+  const gridC = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const textC = isDark ? '#5a7a9a' : '#6b849e';
+
+  // Y gridlines & labels
+  const steps = 4;
+  ctx.strokeStyle = gridC; ctx.lineWidth = 1;
+  ctx.fillStyle = textC; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+  for(let i=0;i<=steps;i++){
+    const y = pad.t + cH * (1 - i/steps);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W-pad.r, y); ctx.stroke();
+    ctx.fillText(yFmt(Math.round(maxV*i/steps)), pad.l-3, y+3);
+  }
+
+  // Bars
+  d25.forEach((v,i)=>{
+    const x = pad.l + i*grpW + grpW*0.15;
+    const bH = cH * (v/maxV);
+    ctx.fillStyle = c25;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x, pad.t+cH-bH, bW, bH, [2,2,0,0]) : ctx.rect(x, pad.t+cH-bH, bW, bH);
+    ctx.fill();
+  });
+  d26.forEach((v,i)=>{
+    const x = pad.l + i*grpW + grpW*0.15 + bW + 2;
+    const bH = cH * (v/maxV);
+    ctx.fillStyle = c26;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(x, pad.t+cH-bH, bW, bH, [2,2,0,0]) : ctx.rect(x, pad.t+cH-bH, bW, bH);
+    ctx.fill();
+    // value label on top
+    if(v>0){
+      ctx.fillStyle = c26; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+      ctx.fillText(yFmt(v), x+bW/2, pad.t+cH-bH-2);
+    }
+  });
+
+  // X labels
+  ctx.fillStyle = textC; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+  labels.forEach((l,i)=>{ ctx.fillText(l, pad.l + i*grpW + grpW/2, H-4); });
+}
+
+function _drawStackedBar(ctx, W, H, labels, series){
+  ctx.clearRect(0,0,W,H);
+  const pad = {t:10, b:26, l:38, r:8};
+  const n = labels.length; if(!n) return;
+  const totals = labels.map((_,i)=>series.reduce((s,sr)=>s+(sr.data[i]||0),0));
+  const maxV = Math.max(1,...totals);
+  const cH = H - pad.t - pad.b;
+  const cW = W - pad.l - pad.r;
+  const bW = Math.min(cW/n * 0.55, 28);
+  const isDark = document.documentElement.dataset.theme === 'dark' || document.documentElement.dataset.theme === 'slate';
+  const gridC = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+  const textC = isDark ? '#5a7a9a' : '#6b849e';
+
+  ctx.strokeStyle = gridC; ctx.lineWidth = 1;
+  ctx.fillStyle = textC; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+  for(let i=0;i<=4;i++){
+    const y = pad.t + cH*(1-i/4);
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(W-pad.r,y); ctx.stroke();
+    ctx.fillText(Math.round(maxV*i/4), pad.l-3, y+3);
+  }
+
+  labels.forEach((_,i)=>{
+    const x = pad.l + i*(cW/n) + (cW/n - bW)/2;
+    let stackY = pad.t + cH;
+    series.forEach(sr=>{
+      const v = sr.data[i]||0; if(!v) return;
+      const bH = cH*(v/maxV);
+      stackY -= bH;
+      ctx.fillStyle = sr.color;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x, stackY, bW, bH, [1,1,0,0]) : ctx.rect(x, stackY, bW, bH);
+      ctx.fill();
+    });
+    // total on top
+    if(totals[i]>0){
+      ctx.fillStyle = textC; ctx.font='bold 8px monospace'; ctx.textAlign='center';
+      ctx.fillText(totals[i], x+bW/2, stackY-2);
+    }
+  });
+
+  ctx.fillStyle = textC; ctx.font='9px monospace'; ctx.textAlign='center';
+  labels.forEach((l,i)=>{ ctx.fillText(l, pad.l + i*(cW/n) + cW/n/2, H-4); });
+}
+
+// ── Rep Detail Table with Conditional Formatting ──
+let _anlTargets = {};
+
+function renderAnalyticsTable(){
+  // Read thresholds
+  const tG = parseInt(document.getElementById('ath-green')?.value||20);
+  const tY = parseInt(document.getElementById('ath-yellow')?.value||10);
+  const tO = parseInt(document.getElementById('ath-orange')?.value||3);
+
+  // Read targets
+  const avail = [1,2,3,4,5,6,7,8,9,10,11,12];
+  _anlTargets = {};
+  avail.forEach(m => {
+    const el = document.getElementById(`anl-tgt-${m}`);
+    _anlTargets[m] = el ? parseInt(el.value)||0 : 0;
+  });
+
+  const selMo = _anlMonths.size ? [..._anlMonths].sort((a,b)=>a-b) : avail;
+  const doAmount = _anlView === 'amount';
+
+  // Gather rep data from rep_monthly
+  const groups = ['East','West','National'];
+  const repsByGrp = {};
+  groups.forEach(g => repsByGrp[g] = []);
+  Object.keys(D.rep_monthly||{}).forEach(rep => {
+    const grp = D.rep_group[rep]||'';
+    if(!repsByGrp[grp]) return;
+    const monthly = {};
+    let rowTotal = 0;
+    selMo.forEach(m => {
+      const mk = `2026-${String(m).padStart(2,'0')}`;
+      const d = (D.rep_monthly[rep].monthly||{})[mk]||{};
+      // Use activity count for "count" view
+      const actD = D.activity?.[rep]?.monthly?.[mk]||0;
+      const amtV = d.target||0; // we show pipeline amount from rep_pipeline_summary
+      // Actually for pipeline amount per rep per month we need pipeline_created
+      // Use pc weeks data to get monthly amount created by rep
+      monthly[m] = {
+        amt: _getRepMonthPipelineAmt(rep, m),
+        cnt: _getRepMonthPipelineCnt(rep, m),
+        act: actD,
+      };
+      rowTotal += doAmount ? monthly[m].amt : monthly[m].cnt;
+    });
+    repsByGrp[grp].push({rep, monthly, rowTotal});
+  });
+
+  // Cell color for count
+  const cntCls = v => {
+    if(!v || v===0) return 'anl-cell-zero';
+    if(v >= tG) return 'anl-cell-green';
+    if(v >= tY) return 'anl-cell-amber';
+    if(v >= tO) return 'anl-cell-orange';
+    return 'anl-cell-red';
+  };
+  // Cell color for amount vs target
+  const amtCls = (v, m) => {
+    const tgt = _anlTargets[m]||0;
+    if(!v||v===0) return 'anl-cell-zero';
+    if(!tgt) return '';
+    const ratio = v/tgt;
+    if(ratio>=1) return 'anl-cell-green';
+    if(ratio>=0.7) return 'anl-cell-amber';
+    if(ratio>=0.3) return 'anl-cell-orange';
+    return 'anl-cell-red';
+  };
+
+  const fV = (v, m) => {
+    if(doAmount) return v>0 ? `<span class="${amtCls(v,m)}">${fM(v)}</span>` : `<span class="anl-cell-zero">—</span>`;
+    return v>0 ? `<span class="${cntCls(v)}">${v}</span>` : `<span class="anl-cell-zero">—</span>`;
+  };
+
+  const moThs = selMo.map(m=>`<th>${MO[m]}</th>`).join('');
+  let h = `<thead>
+    <tr>
+      <th style="text-align:left;min-width:140px">Sales Rep</th>
+      <th style="text-align:center;min-width:60px">Team</th>
+      ${moThs}
+      <th style="background:rgba(37,99,235,.08);color:var(--blue)">Total</th>
+    </tr>
+  </thead><tbody>`;
+
+  groups.forEach(grp => {
+    const reps = repsByGrp[grp] || [];
+    if(!reps.length) return;
+    // Group total row
+    const grpMo = {};
+    selMo.forEach(m => {
+      grpMo[m] = reps.reduce((s,r) => s+(doAmount?r.monthly[m]?.amt:r.monthly[m]?.cnt)||0, 0);
+    });
+    const grpTotal = Object.values(grpMo).reduce((s,v)=>s+v,0);
+    const grpTds = selMo.map(m => `<td>${fV(grpMo[m]||0,m)}</td>`).join('');
+    h += `<tr class="anl-grp-row">
+      <td style="color:${gCol[grp]||'var(--muted)'}">${grp.toUpperCase()}</td>
+      <td></td>
+      ${grpTds}
+      <td style="color:var(--blue);font-weight:800">${doAmount?fM(grpTotal):grpTotal}</td>
+    </tr>`;
+    // Rep rows sorted by total desc
+    reps.sort((a,b)=>b.rowTotal-a.rowTotal).forEach(r => {
+      const repTds = selMo.map(m=>`<td>${fV(doAmount?r.monthly[m]?.amt||0:r.monthly[m]?.cnt||0, m)}</td>`).join('');
+      h += `<tr>
+        <td style="padding-left:20px;cursor:pointer;color:var(--blue)" onclick="openRepDetail('${r.rep.replace(/'/g,"\\'")}')">
+          ${r.rep.length>26?r.rep.slice(0,25)+'…':r.rep}</td>
+        <td style="text-align:center"><span class="gb ${grp}">${grp}</span></td>
+        ${repTds}
+        <td style="font-weight:700">${doAmount?fM(r.rowTotal):r.rowTotal||'—'}</td>
+      </tr>`;
+    });
+  });
+
+  h += '</tbody>';
+  document.getElementById('analyticsTable').innerHTML = h;
+}
+
+function _getRepMonthPipelineAmt(rep, m){
+  // Sum pipeline_created deals for this rep in this month (2026)
+  const weeks = D.pipeline_created_weeks || {};
+  let total = 0;
+  Object.values(weeks).forEach(wdata => {
+    (wdata.deals||[]).forEach(d => {
+      if(d.rep !== rep) return;
+      const cr = d.created||''; if(cr.length<7) return;
+      if(parseInt(cr.slice(0,4)) !== 2026) return;
+      if(parseInt(cr.slice(5,7)) !== m) return;
+      total += d.amount||0;
+    });
+  });
+  return total;
+}
+function _getRepMonthPipelineCnt(rep, m){
+  const weeks = D.pipeline_created_weeks || {};
+  let cnt = 0;
+  Object.values(weeks).forEach(wdata => {
+    (wdata.deals||[]).forEach(d => {
+      if(d.rep !== rep) return;
+      const cr = d.created||''; if(cr.length<7) return;
+      if(parseInt(cr.slice(0,4)) !== 2026) return;
+      if(parseInt(cr.slice(5,7)) !== m) return;
+      cnt++;
+    });
+  });
+  return cnt;
+}
+
+// ══════════════════════════════════════════════════════════════
+// 4) PIPELINE CREATED SECTION
+// ══════════════════════════════════════════════════════════════
+let _pcTeam = 'All', _pcWeek = null;
+
+function initPipelineCreated(){
+  renderPCMonthlyTable();
+  renderPCTable();
+}
+
+function setPCTeam(t, btn){
+  _pcTeam = t;
+  document.querySelectorAll('.pc-tbtn').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  renderPCChart();
+  renderPCTable();
+}
+
+function getPCDeals(){
+  const allWeeks = D.pipeline_created_weeks || {};
+  const pcCatMap = D.pc_cat_map || {};
+  let deals = [];
+  Object.keys(allWeeks).filter(k=>k.startsWith('2026')).forEach(k => deals = deals.concat(allWeeks[k].deals || []));
+  if(_pcTeam !== 'All'){
+    // Filter by pc_cat (Mobile/TBD) or group (East/West/National/Distribution)
+    const catTeams = new Set(['Mobile','TBD']);
+    if(catTeams.has(_pcTeam)){
+      deals = deals.filter(d => (d.pc_cat || pcCatMap[d.rep] || 'TBD') === _pcTeam);
+    } else {
+      deals = deals.filter(d => d.group === _pcTeam);
+    }
+  }
+  return deals;
+}
+
+function renderPCMonthlyTable(){
+  const wrap = document.getElementById('pcMonthlyTable');
+  if(!wrap) return;
+  const allWeeks = D.pipeline_created_weeks || {};
+  const pcCatMap = D.pc_cat_map || {};
+
+  // Aggregate by year+month from deal.created, filtered by pc_cat/group
+  const agg = {}; // agg[year][month] = {count, amount}
+  Object.values(allWeeks).forEach(wdata => {
+    (wdata.deals || []).forEach(d => {
+      const cat = d.pc_cat || pcCatMap[d.rep] || 'TBD';
+      // Apply team filter
+      if(_pcTeam !== 'All'){
+        const catTeams = new Set(['Mobile','TBD']);
+        if(catTeams.has(_pcTeam)){ if(cat !== _pcTeam) return; }
+        else { if(d.group !== _pcTeam) return; }
+      }
+      const cr = d.created || '';
+      if(cr.length < 7) return;
+      const yr = parseInt(cr.slice(0,4));
+      const mo = parseInt(cr.slice(5,7));
+      if(!agg[yr]) agg[yr]={};
+      if(!agg[yr][mo]) agg[yr][mo]={count:0,amount:0};
+      agg[yr][mo].count++;
+      agg[yr][mo].amount += d.amount;
+    });
+  });
+
+  // Determine columns: months 1-12, only show if either year has data
+  const MO_NAMES=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const cur_yr = 2026;
+  const prev_yr = 2025;
+  const data26 = agg[cur_yr] || {};
+  const data25 = agg[prev_yr] || {};
+
+  // Columns = all months that have any data in either year
+  const allMos = new Set([...Object.keys(data26).map(Number), ...Object.keys(data25).map(Number)]);
+  const months = [...allMos].sort((a,b)=>a-b);
+
+  // Totals
+  const tot26c = months.reduce((a,m)=>(data26[m]?.count||0)+a, 0);
+  const tot26a = months.reduce((a,m)=>(data26[m]?.amount||0)+a, 0);
+  const tot25c = months.reduce((a,m)=>(data25[m]?.count||0)+a, 0);
+  const tot25a = months.reduce((a,m)=>(data25[m]?.amount||0)+a, 0);
+
+  // Only compare months where 2026 has data (Jan–Mar currently)
+  const cmpMos = months.filter(m => data26[m]?.count > 0);
+  const cmp26c = cmpMos.reduce((a,m)=>(data26[m]?.count||0)+a,0);
+  const cmp26a = cmpMos.reduce((a,m)=>(data26[m]?.amount||0)+a,0);
+  const cmp25c = cmpMos.reduce((a,m)=>(data25[m]?.count||0)+a,0);
+  const cmp25a = cmpMos.reduce((a,m)=>(data25[m]?.amount||0)+a,0);
+
+  const pct = (a,b) => b===0 ? (a>0?'NEW':'—') : ((a-b)/b*100).toFixed(0)+'%';
+  const pctCls = (a,b) => b===0 ? (a>0?'pos':'neu') : (a>=b ? 'pos' : 'neg');
+  const fAmt = v => v>=1e6?'$'+(v/1e6).toFixed(1)+'M' : v>=1e3?'$'+(v/1e3).toFixed(0)+'K' : '$'+v.toFixed(0);
+
+  let h = `<table style="border-collapse:collapse;width:100%;font-size:12px;min-width:600px">
+  <colgroup><col style="width:160px">${months.map(()=>'<col style="min-width:72px">').join('')}<col style="min-width:80px"></colgroup>
+  <thead>
+    <tr>
+      <th style="text-align:left;padding:7px 10px;background:var(--surface2);border-bottom:2px solid var(--border);font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.4px">METRIC</th>
+      ${months.map(m=>`<th style="text-align:center;padding:7px 8px;background:${data26[m]?.count>0?'rgba(37,99,235,.07)':'var(--surface2)'};border-bottom:2px solid var(--border);font-size:11px;font-weight:700;color:${data26[m]?.count>0?'var(--blue)':'var(--muted)'};">${MO_NAMES[m]}</th>`).join('')}
+      <th style="text-align:center;padding:7px 8px;background:var(--surface2);border-bottom:2px solid var(--border);font-size:11px;font-weight:700;color:var(--muted)">TOTAL*</th>
+    </tr>
+  </thead>
+  <tbody>`;
+
+  // Row helper
+  const row = (label, vals, cls='', bold=false, color='') => {
+    const st = `font-weight:${bold?'700':'400'};color:${color||'inherit'}`;
+    return `<tr class="${cls}">
+      <td style="padding:7px 10px;${st};font-size:11px;border-bottom:1px solid var(--border);white-space:nowrap">${label}</td>
+      ${vals.map((v,i)=>`<td style="text-align:center;padding:7px 8px;${st};border-bottom:1px solid var(--border)">${v}</td>`).join('')}
+    </tr>`;
+  };
+
+  // 2026 # Deals
+  h += row(
+    `<span style="font-size:10px;background:rgba(37,99,235,.12);color:var(--blue);border-radius:3px;padding:1px 6px;font-weight:700">2026</span>  # Deals`,
+    [...months.map(m => data26[m]?.count > 0 ? `<strong style="color:var(--blue)">${data26[m].count}</strong>` : '<span style="color:var(--muted2)">—</span>'),
+     `<strong style="color:var(--blue)">${tot26c}</strong>`],
+    'row-2026', true
+  );
+
+  // 2026 Amount
+  h += row(
+    `<span style="font-size:10px;background:rgba(37,99,235,.12);color:var(--blue);border-radius:3px;padding:1px 6px;font-weight:700">2026</span>  Amount`,
+    [...months.map(m => data26[m]?.amount > 0 ? `<strong style="color:var(--blue)">${fAmt(data26[m].amount)}</strong>` : '<span style="color:var(--muted2)">—</span>'),
+     `<strong style="color:var(--blue)">${fAmt(tot26a)}</strong>`],
+    'row-2026'
+  );
+
+  // Separator
+  h += `<tr><td colspan="${months.length+2}" style="padding:2px 0;background:var(--surface2)"></td></tr>`;
+
+  // 2025 # Deals
+  h += row(
+    `<span style="font-size:10px;background:rgba(107,114,128,.15);color:var(--muted);border-radius:3px;padding:1px 6px;font-weight:700">2025</span>  # Deals`,
+    [...months.map(m => data25[m]?.count > 0 ? `${data25[m].count}` : '<span style="color:var(--muted2)">—</span>'),
+     `${tot25c}`],
+    'row-2025', false, 'var(--muted)'
+  );
+
+  // 2025 Amount
+  h += row(
+    `<span style="font-size:10px;background:rgba(107,114,128,.15);color:var(--muted);border-radius:3px;padding:1px 6px;font-weight:700">2025</span>  Amount`,
+    [...months.map(m => data25[m]?.amount > 0 ? `${fAmt(data25[m].amount)}` : '<span style="color:var(--muted2)">—</span>'),
+     `${fAmt(tot25a)}`],
+    'row-2025', false, 'var(--muted)'
+  );
+
+  // Separator
+  h += `<tr><td colspan="${months.length+2}" style="padding:2px 0;background:var(--surface2)"></td></tr>`;
+
+  // YoY % Deals
+  const yoyDealVals = months.map(m => {
+    if(!data26[m]) return '<span style="color:var(--muted2)">—</span>';
+    const a=data26[m].count, b=data25[m]?.count||0;
+    const p=pct(a,b); const c=pctCls(a,b);
+    const col = c==='pos'?'var(--green)':c==='neg'?'var(--red)':'var(--muted)';
+    const arrow = c==='pos'?'▲':c==='neg'?'▼':'';
+    return `<span style="font-weight:700;color:${col}">${arrow}${p}</span>`;
+  });
+  const yoyDealTotal = (()=>{const a=cmp26c,b=cmp25c;const p=pct(a,b);const c=pctCls(a,b);const col=c==='pos'?'var(--green)':c==='neg'?'var(--red)':'var(--muted)';const arrow=c==='pos'?'▲':c==='neg'?'▼':'';return `<span style="font-weight:700;color:${col}">${arrow}${p}</span>`;})();
+  h += row(
+    `YoY  # Deals`,
+    [...yoyDealVals, yoyDealTotal],
+    'row-yoy', true
+  );
+
+  // YoY % Amount
+  const yoyAmtVals = months.map(m => {
+    if(!data26[m]) return '<span style="color:var(--muted2)">—</span>';
+    const a=data26[m].amount, b=data25[m]?.amount||0;
+    const p=pct(a,b); const c=pctCls(a,b);
+    const col = c==='pos'?'var(--green)':c==='neg'?'var(--red)':'var(--muted)';
+    const arrow = c==='pos'?'▲':c==='neg'?'▼':'';
+    return `<span style="font-weight:700;color:${col}">${arrow}${p}</span>`;
+  });
+  const yoyAmtTotal = (()=>{const a=cmp26a,b=cmp25a;const p=pct(a,b);const c=pctCls(a,b);const col=c==='pos'?'var(--green)':c==='neg'?'var(--red)':'var(--muted)';const arrow=c==='pos'?'▲':c==='neg'?'▼':'';return `<span style="font-weight:700;color:${col}">${arrow}${p}</span>`;})();
+  h += row(
+    `YoY  Amount`,
+    [...yoyAmtVals, yoyAmtTotal],
+    'row-yoy'
+  );
+
+  h += `</tbody></table>`;
+  h += `<div style="font-size:10px;color:var(--muted2);margin-top:6px;padding-left:2px">* TOTAL: 2026 shows full year-to-date; YoY TOTAL compares Jan–${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Math.max(...Object.keys(data26).map(Number))]} only (matching 2026 data range)</div>`;
+
+  wrap.innerHTML = h;
+}
+
+function renderPCChart(){ renderPCMonthlyTable(); }
+
+
+let _pcSortCol='rep', _pcSortDir='asc';
+
+
+function sortPC(col){
+  if(_pcSortCol===col) _pcSortDir=_pcSortDir==='asc'?'desc':'asc';
+  else { _pcSortCol=col; _pcSortDir=col==='rep'?'asc':'desc'; }
+  renderPCTable();
+}
+
+function renderPCTable(){
+  const wrap = document.getElementById('pcTable');
+  if(!wrap) return;
+  const allWeeks = D.pipeline_created_weeks || {};
+  const pcCatMap = D.pc_cat_map || {};
+  const catOrder = ['East','West','National','Mobile','TBD'];
+  const catColors = {East:'var(--blue)',West:'var(--green)',National:'var(--purple)',
+                     Mobile:'#e11d48',TBD:'var(--muted)'};
+  const MO_NAMES=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  // Gather all deals filtered by pcTeam
+  const allDeals = [];
+  Object.values(allWeeks).forEach(wdata=>{
+    (wdata.deals||[]).forEach(d=>{
+      const cat = d.pc_cat || pcCatMap[d.rep] || 'TBD';
+      if(_pcTeam !== 'All'){
+        const catTeams=new Set(['Mobile','TBD']);
+        if(catTeams.has(_pcTeam)){ if(cat!==_pcTeam) return; }
+        else { if(d.group!==_pcTeam) return; }
+      }
+      allDeals.push({...d, pc_cat: cat});
+    });
+  });
+
+  // Group by rep → monthly breakdown
+  const byRep = {};
+  allDeals.forEach(d=>{
+    const cr = d.created||''; if(cr.length<7) return;
+    const yr=parseInt(cr.slice(0,4)); const mo=parseInt(cr.slice(5,7));
+    if(yr!==2026) return;
+    const cat = d.pc_cat||'TBD';
+    if(!byRep[d.rep]) byRep[d.rep]={rep:d.rep,cat,months:{}};
+    if(!byRep[d.rep].months[mo]) byRep[d.rep].months[mo]={count:0,amount:0};
+    byRep[d.rep].months[mo].count++;
+    byRep[d.rep].months[mo].amount+=d.amount;
+  });
+
+  // Determine which months have data
+  const monthsSet=new Set();
+  Object.values(byRep).forEach(r=>Object.keys(r.months).forEach(m=>monthsSet.add(parseInt(m))));
+  const months=[...monthsSet].sort((a,b)=>a-b);
+  if(!months.length){ wrap.innerHTML='<p style="color:var(--muted);padding:10px">No data</p>'; return; }
+
+  const showGrouped = (_pcTeam==='All');
+
+  // Build header
+  const scPC=col=>_pcSortCol===col?(_pcSortDir==='asc'?' ▲':' ▼'):'';
+  let h=`<table class="dt" style="width:100%;font-size:11px"><thead><tr>
+    <th style="text-align:left;min-width:140px;cursor:pointer" onclick="sortPC('rep')">Rep${scPC('rep')}</th>
+    ${months.map(m=>`<th style="text-align:right;min-width:80px;cursor:pointer" colspan="2" onclick="sortPC('m${m}')">${MO_NAMES[m]}${scPC('m'+m)}</th>`).join('')}
+    <th style="text-align:right;min-width:80px;cursor:pointer" colspan="2" onclick="sortPC('total')">Total${scPC('total')}</th>
+  </tr><tr>
+    <th></th>
+    ${months.map(m=>'<th style="text-align:right;color:var(--blue);font-size:9px">#</th><th style="text-align:right;color:var(--blue);font-size:9px">Amt</th>').join('')}
+    <th style="text-align:right;color:var(--muted);font-size:9px">#</th><th style="text-align:right;color:var(--muted);font-size:9px">Amt</th>
+  </tr></thead><tbody>`;
+
+  const repRow = (r, indent) => {
+    const totC=Object.values(r.months).reduce((a,m)=>a+m.count,0);
+    const totA=Object.values(r.months).reduce((a,m)=>a+m.amount,0);
+    const repQ=r.rep.replace(/'/g,"&#39;");
+    return `<tr>
+      <td style="padding-left:${indent?18:6}px;cursor:pointer;color:var(--blue)" onclick="openPCRepDetail('${repQ}')">${r.rep}</td>
+      ${months.map(m=>{
+        const md=r.months[m]||{count:0,amount:0};
+        return `<td style="text-align:right;color:${md.count>0?'var(--text2)':'var(--muted2)'}">${md.count>0?md.count:'—'}</td>
+                <td style="text-align:right;font-weight:${md.amount>0?600:400};color:${md.amount>0?'var(--blue)':'var(--muted2)'}" ${md.amount>0?`onclick="openPCMonthDetail('${r.rep.replace(/'/g,"\\'")}',${m})" style="cursor:pointer;text-align:right;font-weight:${md.amount>0?600:400};color:${md.amount>0?'var(--blue)':'var(--muted2)'}" title="클릭 시 상세"`:''}>${md.amount>0?fF(md.amount):'—'}</td>`;
+      }).join('')}
+      <td style="text-align:right;font-weight:700">${totC}</td>
+      <td style="text-align:right;font-weight:700;color:var(--blue)">${fF(totA)}</td>
+    </tr>`;
+  };
+
+  const catRowHdr = (cat, reps) => {
+    const col=catColors[cat]||'var(--muted)';
+    // Aggregate cat totals by month
+    const catMo={};
+    reps.forEach(r=>Object.entries(r.months).forEach(([m,v])=>{
+      if(!catMo[m]) catMo[m]={count:0,amount:0};
+      catMo[m].count+=v.count; catMo[m].amount+=v.amount;
+    }));
+    const totC=Object.values(catMo).reduce((a,m)=>a+m.count,0);
+    const totA=Object.values(catMo).reduce((a,m)=>a+m.amount,0);
+    return `<tr style="background:var(--surface2)">
+      <td style="font-weight:700;color:${col};padding-left:6px">&#9658; ${cat.toUpperCase()}</td>
+      ${months.map(m=>{
+        const md=catMo[m]||{count:0,amount:0};
+        return `<td style="text-align:right;font-weight:700;color:${col}">${md.count>0?md.count:'—'}</td>
+                <td style="text-align:right;font-weight:700;color:${col}">${md.amount>0?fF(md.amount):'—'}</td>`;
+      }).join('')}
+      <td style="text-align:right;font-weight:700;color:${col}">${totC}</td>
+      <td style="text-align:right;font-weight:700;color:${col}">${fF(totA)}</td>
+    </tr>`;
+  };
+
+  if(showGrouped){
+    const byCat={};
+    Object.values(byRep).forEach(r=>{
+      if(!byCat[r.cat]) byCat[r.cat]=[];
+      byCat[r.cat].push(r);
+    });
+    catOrder.forEach(cat=>{
+      const reps=byCat[cat]; if(!reps) return;
+      h+=catRowHdr(cat,reps);
+      reps.sort((a,b)=>{
+        let av, bv;
+        if(_pcSortCol==='rep'){av=a.rep.toLowerCase();bv=b.rep.toLowerCase();return _pcSortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);}
+        else if(_pcSortCol==='total'){av=Object.values(a.months).reduce((s,m)=>s+m.amount,0);bv=Object.values(b.months).reduce((s,m)=>s+m.amount,0);}
+        else{const mn=parseInt(_pcSortCol.slice(1));av=(a.months[mn]||{}).amount||0;bv=(b.months[mn]||{}).amount||0;}
+        return _pcSortDir==='asc'?av-bv:bv-av;
+      }).forEach(r=>h+=repRow(r,true));
+    });
+  } else {
+    Object.values(byRep).sort((a,b)=>{
+      let av,bv;
+      if(_pcSortCol==='rep'){av=a.rep.toLowerCase();bv=b.rep.toLowerCase();return _pcSortDir==='asc'?av.localeCompare(bv):bv.localeCompare(av);}
+      else if(_pcSortCol==='total'){av=Object.values(a.months).reduce((s,m)=>s+m.amount,0);bv=Object.values(b.months).reduce((s,m)=>s+m.amount,0);}
+      else{const mn=parseInt(_pcSortCol.slice(1));av=(a.months[mn]||{}).amount||0;bv=(b.months[mn]||{}).amount||0;}
+      return _pcSortDir==='asc'?av-bv:bv-av;
+    }).forEach(r=>h+=repRow(r,false));
+  }
+
+  // Grand total row
+  const grandMo={};
+  Object.values(byRep).forEach(r=>Object.entries(r.months).forEach(([m,v])=>{
+    if(!grandMo[m]) grandMo[m]={count:0,amount:0};
+    grandMo[m].count+=v.count; grandMo[m].amount+=v.amount;
+  }));
+  const gTotC=Object.values(grandMo).reduce((a,m)=>a+m.count,0);
+  const gTotA=Object.values(grandMo).reduce((a,m)=>a+m.amount,0);
+  h+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+    <td>TOTAL</td>
+    ${months.map(m=>{const md=grandMo[m]||{count:0,amount:0};
+      return `<td style="text-align:right">${md.count||'—'}</td><td style="text-align:right;color:var(--blue)">${md.amount>0?fF(md.amount):'—'}</td>`;
+    }).join('')}
+    <td style="text-align:right">${gTotC}</td>
+    <td style="text-align:right;color:var(--blue)">${fF(gTotA)}</td>
+  </tr>`;
+
+  h+='</tbody></table>';
+  wrap.innerHTML=h;
+}
+
+
+function openPCRepDetail(rep){
+  const allWeeks=D.pipeline_created_weeks||{};
+  let deals=[];
+  Object.values(allWeeks).forEach(w=>{
+    (w.deals||[]).forEach(d=>{ if(d.rep===rep) deals.push(d); });
+  });
+  deals.sort((a,b)=>(b.created||'').localeCompare(a.created||''));
+  const total=deals.reduce((a,d)=>a+d.amount,0);
+  const wonCnt=deals.filter(d=>d.closed_won).length;
+  const lostCnt=deals.filter(d=>d.closed_lost).length;
+
+  let tbl=`<table class="dt"><thead><tr>
+    <th>Deal</th><th>Type</th><th>Company</th><th>Status</th>
+    <th style="text-align:right">Amount</th><th>Created</th><th>Exp Close</th><th></th>
+  </tr></thead><tbody>`;
+  deals.forEach(d=>{
+    const badge=closedBadge(d);
+    const hasLines=(d.lines&&d.lines.length)>0;
+    const lineId='pc-'+d.doc.replace(/[^a-z0-9]/gi,'_');
+    const rowStyle=d.closed_won?'style="background:rgba(5,150,105,.04)"':d.closed_lost?'style="background:rgba(220,38,38,.03)"':'';
+    tbl+=`<tr ${rowStyle}>
+      <td style="font-size:10px;font-weight:600;color:var(--blue)">${d.doc}${badge}</td>
+      <td><span class="${d.type==='Quote'?'pl-type-q':'pl-type-o'}">${(d.type||'Q')[0]}</span></td>
+      <td style="font-size:10px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.company||'-'}</td>
+      <td style="font-size:9px;color:var(--muted)">${d.status||'-'}</td>
+      <td style="text-align:right;font-weight:600;color:var(--blue);cursor:${hasLines?'pointer':'default'}"
+          ${hasLines?`onclick="toggleSub('${lineId}')" title="Click for item detail"`:''}>${fF(d.amount)}${hasLines?' <span style="font-size:8px;color:var(--muted)">▾</span>':''}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.created||'-'}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.exp_close||'-'}</td>
+      <td></td>
+    </tr>
+    <tr id="${lineId}" style="display:none;background:var(--surface2)">
+      <td colspan="8" style="padding:0 8px 8px 28px">${renderLineItems(d.lines||[])}</td>
+    </tr>`;
+  });
+  tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+    <td colspan="4" style="color:var(--muted)">
+      TOTAL (${deals.length} deals
+      ${wonCnt?` · <span style="color:var(--green)">✓${wonCnt} WON</span>`:''}
+      ${lostCnt?` · <span style="color:var(--red)">✗${lostCnt} LOST</span>`:''}
+      )
+    </td>
+    <td style="text-align:right;color:var(--blue)">${fF(total)}</td>
+    <td colspan="3"></td>
+  </tr></tbody></table>`;
+
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">📅 Pipeline Created — ${rep}</div>
+    <div class="d-sub">${D.week_tag} · ${deals.length} deals · <strong>${fF(total)}</strong></div>
+    <button class="csv-btn" onclick="exportPCRepCsv('${rep.replace(/'/g,"\\'")}')">📥 CSV</button>
+    <div style="overflow-x:auto;max-height:450px;overflow-y:auto;margin-top:8px">${tbl}</div>`;
+  openOv();
+}
+
+
+
+function openPCMonthDetail(rep, mo){
+  const allWeeks=D.pipeline_created_weeks||{};
+  let deals=[];
+  Object.values(allWeeks).forEach(w=>{
+    (w.deals||[]).forEach(d=>{
+      if(d.rep===rep){
+        const cr=d.created||''; if(cr.length<7) return;
+        if(parseInt(cr.slice(5,7))===mo && parseInt(cr.slice(0,4))===2026)
+          deals.push(d);
+      }
+    });
+  });
+  deals.sort((a,b)=>b.amount-a.amount);
+  const total=deals.reduce((a,d)=>a+d.amount,0);
+  const wonCnt=deals.filter(d=>d.closed_won).length;
+  const moNames=['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+  let tbl=`<table class="dt"><thead><tr>
+    <th>Deal</th><th>Type</th><th>Company</th><th>Status</th>
+    <th style="text-align:right">Amount</th><th>Created</th><th>Exp Close</th><th></th>
+  </tr></thead><tbody>`;
+  deals.forEach(d=>{
+    const badge=closedBadge(d);
+    const hasLines=(d.lines&&d.lines.length)>0;
+    const lineId='pcm-'+d.doc.replace(/[^a-z0-9]/gi,'_')+'-'+mo;
+    const rowStyle=d.closed_won?'style="background:rgba(5,150,105,.04)"':d.closed_lost?'style="background:rgba(220,38,38,.03)"':'';
+    tbl+=`<tr ${rowStyle}>
+      <td style="font-size:10px;font-weight:600;color:var(--blue)">${d.doc}${badge}</td>
+      <td><span class="${d.type==='Quote'?'pl-type-q':'pl-type-o'}">${(d.type||'Q')[0]}</span></td>
+      <td style="font-size:10px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.company||'-'}</td>
+      <td style="font-size:9px;color:var(--muted)">${d.status||'-'}</td>
+      <td style="text-align:right;font-weight:600;color:var(--blue);cursor:${hasLines?'pointer':'default'}"
+          ${hasLines?`onclick="toggleSub('${lineId}')" title="Click for item detail"`:''}>${fF(d.amount)}${hasLines?' <span style="font-size:8px;color:var(--muted)">▾</span>':''}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.created||'-'}</td>
+      <td style="font-size:10px;color:var(--muted)">${d.exp_close||'-'}</td>
+      <td></td>
+    </tr>
+    <tr id="${lineId}" style="display:none;background:var(--surface2)">
+      <td colspan="8" style="padding:0 8px 8px 28px">${renderLineItems(d.lines||[])}</td>
+    </tr>`;
+  });
+  tbl+=`<tr style="border-top:2px solid var(--border);font-weight:700;background:var(--surface2)">
+    <td colspan="4" style="color:var(--muted)">
+      TOTAL (${deals.length} deals${wonCnt?` · <span style="color:var(--green)">${wonCnt} WON</span>`:''})
+    </td>
+    <td style="text-align:right;color:var(--blue)">${fF(total)}</td><td colspan="3"></td>
+  </tr></tbody></table>`;
+
+  document.getElementById('dc').innerHTML=`
+    <div class="d-name">📅 ${rep} — ${moNames[mo]} Pipeline</div>
+    <div class="d-sub">${D.week_tag} · ${deals.length} deals · <strong>${fF(total)}</strong></div>
+    <div style="overflow-x:auto;max-height:450px;overflow-y:auto;margin-top:8px">${tbl}</div>`;
+  openOv();
+}
+
+function exportPCRepCsv(rep){
+  const allWeeks=D.pipeline_created_weeks||{};
+  let csv='Deal,Type,Company,Status,Amount,Created,Exp Close\n';
+  Object.values(allWeeks).forEach(w=>{(w.deals||[]).filter(d=>d.rep===rep).forEach(d=>{
+    csv+=`"${d.doc}","${d.type}","${d.company}","${d.status}",${d.amount},"${d.created}","${d.exp_close}"\n`;
+  });});
+  dlCSV(csv,`pc_${rep}_${D.week_tag}.csv`);
+}
+
+
+function updatePCBadge(){
+  const b=document.getElementById('badge-pc'); if(!b)return;
+  const deals=getPCDeals();
+  const total=deals.reduce((a,d)=>a+d.amount,0);
+  b.textContent=`${deals.length} deals · ${fM(total)}`;
+}
+
+
+function setupPCResize(){ /* no-op: table layout, no canvas */ }
+
+window.addEventListener('load',init);
+</script>
+</body>
+</html>
